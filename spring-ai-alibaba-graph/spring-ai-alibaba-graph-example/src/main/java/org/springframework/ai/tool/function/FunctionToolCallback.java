@@ -38,6 +38,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Mono;
 
 /**
  * TODO, a copy to fix issue https://github.com/spring-projects/spring-ai/issues/2497 This
@@ -90,29 +91,31 @@ public class FunctionToolCallback<I, O> implements ToolCallback {
 	}
 
 	@Override
-	public String call(String toolInput) {
+	public Mono<String> call(String toolInput) {
 		return call(toolInput, null);
 	}
 
 	@Override
-	public String call(String toolInput, @Nullable ToolContext toolContext) {
-		Assert.hasText(toolInput, "toolInput cannot be null or empty");
+	public Mono<String> call(String toolInput, @Nullable ToolContext toolContext) {
+		return Mono.fromCallable(() -> {
+			Assert.hasText(toolInput, "toolInput cannot be null or empty");
 
-		logger.debug("Starting execution of tool: {}", toolDefinition.name());
+			logger.debug("Starting execution of tool: {}", toolDefinition.name());
 
-		// TODO, fix issue https://github.com/spring-projects/spring-ai/issues/2497
-		I request;
-		if (toolInputType == String.class) {
-			request = (I) toolInput;
-		}
-		else {
-			request = JsonParser.fromJson(toolInput, toolInputType);
-		}
-		O response = toolFunction.apply(request, toolContext);
+			// TODO, fix issue https://github.com/spring-projects/spring-ai/issues/2497
+			I request;
+			if (toolInputType == String.class) {
+				request = (I) toolInput;
+			}
+			else {
+				request = JsonParser.fromJson(toolInput, toolInputType);
+			}
+			O response = toolFunction.apply(request, toolContext);
 
-		logger.debug("Successful execution of tool: {}", toolDefinition.name());
+			logger.debug("Successful execution of tool: {}", toolDefinition.name());
 
-		return toolCallResultConverter.convert(response, null);
+			return toolCallResultConverter.convert(response, null);
+		});
 	}
 
 	@Override

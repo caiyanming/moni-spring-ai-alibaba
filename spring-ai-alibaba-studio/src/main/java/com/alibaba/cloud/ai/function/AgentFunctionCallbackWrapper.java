@@ -34,6 +34,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.resolution.TypeResolverHelper;
 import org.springframework.ai.util.json.schema.SchemaType;
 import org.springframework.util.Assert;
+import reactor.core.publisher.Mono;
 
 @EqualsAndHashCode
 public class AgentFunctionCallbackWrapper<I, O> implements BiFunction<I, ToolContext, O>, ToolCallback {
@@ -84,10 +85,12 @@ public class AgentFunctionCallbackWrapper<I, O> implements BiFunction<I, ToolCon
 	}
 
 	@Override
-	public String call(String functionInput, ToolContext toolContext) {
-		I request = fromJson(functionInput, inputType);
-		O response = apply(request, toolContext);
-		return this.responseConverter.apply(response);
+	public Mono<String> call(String functionInput, ToolContext toolContext) {
+		return Mono.fromCallable(() -> {
+			I request = fromJson(functionInput, inputType);
+			O response = apply(request, toolContext);
+			return this.responseConverter.apply(response);
+		});
 	}
 
 	@Override
@@ -95,9 +98,12 @@ public class AgentFunctionCallbackWrapper<I, O> implements BiFunction<I, ToolCon
 		return ToolDefinition.builder().name(name).description(description).inputSchema(inputTypeSchema).build();
 	}
 
-	public String call(String functionArguments) {
-		I request = fromJson(functionArguments, inputType);
-		return andThen(responseConverter).apply(request, null);
+	@Override
+	public Mono<String> call(String functionArguments) {
+		return Mono.fromCallable(() -> {
+			I request = fromJson(functionArguments, inputType);
+			return andThen(responseConverter).apply(request, null);
+		});
 	}
 
 	private <T> T fromJson(String json, Class<T> targetClass) {

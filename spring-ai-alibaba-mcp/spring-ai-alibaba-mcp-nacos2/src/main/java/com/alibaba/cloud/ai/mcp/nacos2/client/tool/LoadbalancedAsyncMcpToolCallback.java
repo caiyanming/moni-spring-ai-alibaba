@@ -24,6 +24,7 @@ import org.springframework.ai.mcp.McpToolUtils;
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import reactor.core.publisher.Mono;
 
 import java.util.Map;
 
@@ -42,6 +43,7 @@ public class LoadbalancedAsyncMcpToolCallback implements ToolCallback {
 		this.tool = tool;
 	}
 
+	@Override
 	public ToolDefinition getToolDefinition() {
 		return ToolDefinition.builder()
 			.name(McpToolUtils.prefixedToolName(this.mcpClient.getServiceName(), this.tool.name()))
@@ -50,21 +52,21 @@ public class LoadbalancedAsyncMcpToolCallback implements ToolCallback {
 			.build();
 	}
 
-	public String call(String functionInput) {
+	@Override
+	public Mono<String> call(String functionInput) {
 		Map<String, Object> arguments = ModelOptionsUtils.jsonToMap(functionInput);
-		return (String) this.mcpClient.callTool(new McpSchema.CallToolRequest(this.tool.name(), arguments))
-			.map((response) -> {
-				if (response.isError() != null && response.isError()) {
-					throw new IllegalStateException("Error calling tool: " + String.valueOf(response.content()));
-				}
-				else {
-					return ModelOptionsUtils.toJsonString(response.content());
-				}
-			})
-			.block();
+		return this.mcpClient.callTool(new McpSchema.CallToolRequest(this.tool.name(), arguments)).map((response) -> {
+			if (response.isError() != null && response.isError()) {
+				throw new IllegalStateException("Error calling tool: " + String.valueOf(response.content()));
+			}
+			else {
+				return ModelOptionsUtils.toJsonString(response.content());
+			}
+		});
 	}
 
-	public String call(String toolArguments, ToolContext toolContext) {
+	@Override
+	public Mono<String> call(String toolArguments, ToolContext toolContext) {
 		return this.call(toolArguments);
 	}
 

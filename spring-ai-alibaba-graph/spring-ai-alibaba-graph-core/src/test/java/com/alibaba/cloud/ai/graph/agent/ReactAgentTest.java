@@ -37,6 +37,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.resolution.ToolCallbackResolver;
+import reactor.core.publisher.Mono;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -83,7 +84,7 @@ class ReactAgentTest {
 
 		// Configure mock ToolCallbackResolver
 		when(toolCallbackResolver.resolve(anyString())).thenReturn(toolCallback);
-		when(toolCallback.call(anyString(), any(ToolContext.class))).thenReturn("test tool response");
+		when(toolCallback.call(anyString(), any(ToolContext.class))).thenReturn(Mono.just("test tool response"));
 		when(toolCallback.getToolDefinition()).thenReturn(DefaultToolDefinition.builder()
 			.name("test_function")
 			.description("A test function")

@@ -49,6 +49,7 @@ import org.springframework.ai.tool.resolution.ToolCallbackResolver;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Mono;
 
 /**
  * Inspired from org.springframework.ai.model.tool.DefaultToolCallingManager.
@@ -121,7 +122,7 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 	}
 
 	@Override
-	public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+	public Mono<ToolExecutionResult> executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
 		Assert.notNull(prompt, "prompt cannot be null");
 		Assert.notNull(chatResponse, "chatResponse cannot be null");
 
@@ -138,16 +139,18 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 
 		ToolContext toolContext = buildToolContext(prompt, assistantMessage);
 
-		InternalToolExecutionResult internalToolExecutionResult = executeToolCall(prompt, assistantMessage,
-				toolContext);
+		return Mono.fromCallable(() -> {
+			InternalToolExecutionResult internalToolExecutionResult = executeToolCall(prompt, assistantMessage,
+					toolContext);
 
-		List<Message> conversationHistory = buildConversationHistoryAfterToolExecution(prompt.getInstructions(),
-				assistantMessage, internalToolExecutionResult.toolResponseMessage());
+			List<Message> conversationHistory = buildConversationHistoryAfterToolExecution(prompt.getInstructions(),
+					assistantMessage, internalToolExecutionResult.toolResponseMessage());
 
-		return ToolExecutionResult.builder()
-			.conversationHistory(conversationHistory)
-			.returnDirect(internalToolExecutionResult.returnDirect())
-			.build();
+			return ToolExecutionResult.builder()
+				.conversationHistory(conversationHistory)
+				.returnDirect(internalToolExecutionResult.returnDirect())
+				.build();
+		});
 	}
 
 	private static ToolContext buildToolContext(Prompt prompt, AssistantMessage assistantMessage) {
@@ -221,7 +224,7 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 				.observe(() -> {
 					String result;
 					try {
-						result = toolCallback.call(toolInputArguments, toolContext);
+						result = toolCallback.call(toolInputArguments, toolContext).block();
 					}
 					catch (ToolExecutionException ex) {
 						observationContext.setError(ex);

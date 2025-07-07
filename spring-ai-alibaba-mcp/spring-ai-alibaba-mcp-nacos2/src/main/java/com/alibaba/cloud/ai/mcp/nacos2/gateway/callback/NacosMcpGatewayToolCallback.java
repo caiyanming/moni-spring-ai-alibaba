@@ -30,6 +30,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.lang.NonNull;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 public class NacosMcpGatewayToolCallback implements ToolCallback {
 
@@ -53,28 +54,34 @@ public class NacosMcpGatewayToolCallback implements ToolCallback {
 	}
 
 	@Override
-	public String call(@NonNull final String input) {
+	public Mono<String> call(@NonNull final String input) {
 		return call(input, new ToolContext(Maps.newHashMap()));
 	}
 
 	@Override
-	public String call(@NonNull final String input, final ToolContext toolContext) {
-		try {
+	public Mono<String> call(@NonNull final String input, final ToolContext toolContext) {
+		return Mono.fromCallable(() -> {
 			logger.info("Tool callback: {} input: {}, toolContext: {}", toolDefinition.name(), input, toolContext);
 			NacosMcpGatewayToolDefinition nacosToolDefinition = (NacosMcpGatewayToolDefinition) this.toolDefinition;
 			logger.info("Tool callback toolDefinition: {}", JacksonUtils.toJson(nacosToolDefinition));
-			Instance instance = namingService.selectOneHealthyInstance(nacosToolDefinition.getServiceName());
-			logger.info("Tool callback instance: {}", JacksonUtils.toJson(instance));
-			String url = "http://" + instance.getIp() + ":" + instance.getPort() + nacosToolDefinition.getRequestPath();
-			logger.info("Tool callback url: {}", url);
-			if (nacosToolDefinition.getRequestMethod().equalsIgnoreCase("POST")) {
-				return webClient.post().uri(url).bodyValue(input).retrieve().bodyToMono(String.class).block();
+			try {
+				Instance instance = namingService.selectOneHealthyInstance(nacosToolDefinition.getServiceName());
+				logger.info("Tool callback instance: {}", JacksonUtils.toJson(instance));
+				String url = "http://" + instance.getIp() + ":" + instance.getPort()
+						+ nacosToolDefinition.getRequestPath();
+				logger.info("Tool callback url: {}", url);
+				return url;
 			}
-			return webClient.get().uri(url).retrieve().bodyToMono(String.class).block();
-		}
-		catch (NacosException e) {
-			throw new RuntimeException(e);
-		}
+			catch (NacosException e) {
+				throw new RuntimeException(e);
+			}
+		}).flatMap(url -> {
+			NacosMcpGatewayToolDefinition nacosToolDefinition = (NacosMcpGatewayToolDefinition) this.toolDefinition;
+			if (nacosToolDefinition.getRequestMethod().equalsIgnoreCase("POST")) {
+				return webClient.post().uri(url).bodyValue(input).retrieve().bodyToMono(String.class);
+			}
+			return webClient.get().uri(url).retrieve().bodyToMono(String.class);
+		});
 	}
 
 }

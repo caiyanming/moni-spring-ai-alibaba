@@ -199,7 +199,7 @@ public class DashScopeChatModel implements ChatModel {
 			});
 
 		if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-			var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
+			var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response).block();
 			if (toolExecutionResult.returnDirect()) {
 				// Return tool execution result directly to the client.
 				return ChatResponse.builder()
@@ -261,7 +261,7 @@ public class DashScopeChatModel implements ChatModel {
 					if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
 						return Flux.defer(
 								() -> {
-									var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
+									var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response).block();
 									if (toolExecutionResult.returnDirect()) {
 										// Return tool execution result directly to the client.
 										return Flux.just(ChatResponse.builder().from(response)

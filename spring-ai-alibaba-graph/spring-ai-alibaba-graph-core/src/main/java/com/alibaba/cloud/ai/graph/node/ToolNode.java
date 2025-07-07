@@ -92,7 +92,7 @@ public class ToolNode implements NodeAction {
 
 			ToolCallback toolCallback = this.resolve(toolName);
 
-			String toolResult = toolCallback.call(toolArgs, new ToolContext(Map.of("state", state)));
+			String toolResult = toolCallback.call(toolArgs, new ToolContext(Map.of("state", state))).block();
 			toolResponses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, toolResult));
 		}
 		return new ToolResponseMessage(toolResponses, Map.of());

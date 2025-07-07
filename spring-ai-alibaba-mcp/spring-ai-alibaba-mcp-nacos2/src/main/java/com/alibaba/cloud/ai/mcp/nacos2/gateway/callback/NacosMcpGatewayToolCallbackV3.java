@@ -272,14 +272,14 @@ public class NacosMcpGatewayToolCallbackV3 implements ToolCallback {
 	}
 
 	@Override
-	public String call(@NonNull final String input) {
+	public Mono<String> call(@NonNull final String input) {
 		return call(input, new ToolContext(Maps.newHashMap()));
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
-	public String call(@NonNull final String input, final ToolContext toolContext) {
-		try {
+	public Mono<String> call(@NonNull final String input, final ToolContext toolContext) {
+		return Mono.fromCallable(() -> {
 			logger.info("[call] input: {} toolContext: {}", input, JacksonUtils.toJson(toolContext));
 
 			// input解析
@@ -306,46 +306,58 @@ public class NacosMcpGatewayToolCallbackV3 implements ToolCallback {
 					Map<String, Object> refMap = (Map<String, Object>) serviceRef;
 					String serviceName = (String) refMap.get("serviceName");
 					String groupName = (String) refMap.get("groupName");
-					Instance instance = namingService.selectOneHealthyInstance(serviceName, groupName);
-					logger.info("Tool callback instance: {}", JacksonUtils.toJson(instance));
-					Map<String, Object> toolsMeta = (Map<String, Object>) nacosToolDefinition.getToolsMeta();
-					String baseUrl = "http://" + instance.getIp() + ":" + instance.getPort();
+					try {
+						Instance instance = namingService.selectOneHealthyInstance(serviceName, groupName);
+						logger.info("Tool callback instance: {}", JacksonUtils.toJson(instance));
+						Map<String, Object> toolsMeta = (Map<String, Object>) nacosToolDefinition.getToolsMeta();
+						String baseUrl = "http://" + instance.getIp() + ":" + instance.getPort();
 
-					if (toolsMeta != null && toolsMeta.containsKey("templates")) {
-						Map<String, Object> templates = (Map<String, Object>) toolsMeta.get("templates");
-						if (templates != null && templates.containsKey("json-go-template")) {
-							Object jsonGoTemplate = templates.get("json-go-template");
-							try {
-								logger.info("[call] json-go-template: {}",
-										objectMapper.writeValueAsString(jsonGoTemplate));
-							}
-							catch (JsonProcessingException e) {
-								logger.error("[call] Failed to serialize json-go-template", e);
-							}
-							try {
-								// 调用executeToolRequest
-								String configJson = objectMapper.writeValueAsString(jsonGoTemplate);
-								logger.info("[executeToolRequest] configJson: {} args: {} baseUrl: {}", configJson,
-										args, baseUrl);
-								return processToolRequest(configJson, args, baseUrl).block();
-							}
-							catch (Exception e) {
-								logger.error("Failed to execute tool request", e);
-								return "";
+						if (toolsMeta != null && toolsMeta.containsKey("templates")) {
+							Map<String, Object> templates = (Map<String, Object>) toolsMeta.get("templates");
+							if (templates != null && templates.containsKey("json-go-template")) {
+								Object jsonGoTemplate = templates.get("json-go-template");
+								try {
+									logger.info("[call] json-go-template: {}",
+											objectMapper.writeValueAsString(jsonGoTemplate));
+								}
+								catch (JsonProcessingException e) {
+									logger.error("[call] Failed to serialize json-go-template", e);
+								}
+								try {
+									// Return the arguments for reactive chain
+									String configJson = objectMapper.writeValueAsString(jsonGoTemplate);
+									logger.info("[executeToolRequest] configJson: {} args: {} baseUrl: {}", configJson,
+											args, baseUrl);
+									return new Object[] { configJson, args, baseUrl };
+								}
+								catch (Exception e) {
+									logger.error("Failed to prepare tool request", e);
+									return new Object[] { null, null, null };
+								}
 							}
 						}
+						else {
+							logger.warn("[call] templates not found in toolsMeta");
+						}
 					}
-					else {
-						logger.warn("[call] templates not found in toolsMeta");
+					catch (NacosException e) {
+						throw new RuntimeException(e);
 					}
 				}
 			}
 
-			return "";
-		}
-		catch (NacosException e) {
-			throw new RuntimeException(e);
-		}
+			return new Object[] { null, null, null };
+		}).flatMap(result -> {
+			Object[] params = (Object[]) result;
+			String configJson = (String) params[0];
+			Map<String, Object> args = (Map<String, Object>) params[1];
+			String baseUrl = (String) params[2];
+
+			if (configJson != null && args != null && baseUrl != null) {
+				return processToolRequest(configJson, args, baseUrl);
+			}
+			return Mono.just("");
+		});
 	}
 
 }
