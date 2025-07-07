@@ -26,8 +26,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.ai.image.ImagePrompt;
 import org.springframework.ai.image.ImageResponse;
-import org.springframework.http.ResponseEntity;
-import org.springframework.retry.support.RetryTemplate;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -70,25 +70,26 @@ class DashScopeImageModelTests {
 		// Initialize mock objects and test instances
 		dashScopeImageApi = Mockito.mock(DashScopeImageApi.class);
 		defaultOptions = DashScopeImageOptions.builder().withModel(TEST_MODEL).withN(1).build();
-		imageModel = new DashScopeImageModel(dashScopeImageApi, defaultOptions, RetryTemplate.builder().build(),
-				ObservationRegistry.NOOP);
+		imageModel = new DashScopeImageModel(dashScopeImageApi, defaultOptions, ObservationRegistry.NOOP);
 	}
 
 	@Test
 	void testBasicImageGeneration() {
-		// Test basic image generation with successful response
+		// Test basic reactive image generation with successful response
 		mockSuccessfulImageGeneration();
 
 		ImagePrompt prompt = new ImagePrompt(TEST_PROMPT);
-		ImageResponse response = imageModel.call(prompt);
+		Mono<ImageResponse> responseMono = imageModel.callReactive(prompt);
 
-		assertThat(response.getResults()).hasSize(1);
-		assertThat(response.getResult().getOutput().getUrl()).isEqualTo(TEST_IMAGE_URL);
+		StepVerifier.create(responseMono).assertNext(response -> {
+			assertThat(response.getResults()).hasSize(1);
+			assertThat(response.getResult().getOutput().getUrl()).isEqualTo(TEST_IMAGE_URL);
+		}).verifyComplete();
 	}
 
 	@Test
 	void testCustomOptions() {
-		// Test image generation with custom options
+		// Test reactive image generation with custom options
 		mockSuccessfulImageGeneration();
 
 		DashScopeImageOptions customOptions = DashScopeImageOptions.builder()
@@ -101,47 +102,75 @@ class DashScopeImageModelTests {
 			.build();
 
 		ImagePrompt prompt = new ImagePrompt(TEST_PROMPT, customOptions);
-		ImageResponse response = imageModel.call(prompt);
+		Mono<ImageResponse> responseMono = imageModel.callReactive(prompt);
 
-		assertThat(response.getResults()).hasSize(1);
-		assertThat(response.getResult().getOutput().getUrl()).isEqualTo(TEST_IMAGE_URL);
+		StepVerifier.create(responseMono).assertNext(response -> {
+			assertThat(response.getResults()).hasSize(1);
+			assertThat(response.getResult().getOutput().getUrl()).isEqualTo(TEST_IMAGE_URL);
+		}).verifyComplete();
 	}
 
 	@Test
 	void testFailedImageGeneration() {
-		// Test handling of failed image generation
+		// Test handling of failed reactive image generation
 		mockFailedImageGeneration();
 
 		ImagePrompt prompt = new ImagePrompt(TEST_PROMPT);
-		ImageResponse response = imageModel.call(prompt);
+		Mono<ImageResponse> responseMono = imageModel.callReactive(prompt);
 
-		assertThat(response.getResults()).isEmpty();
+		StepVerifier.create(responseMono)
+			.assertNext(response -> assertThat(response.getResults()).isEmpty())
+			.verifyComplete();
 	}
 
 	@Test
 	void testNullResponse() {
-		// Test handling of null API response
-		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(null);
+		// Test handling of null API response reactively
+		// When submitImageGenTask returns empty, it means no task ID was generated
+		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(Mono.empty());
 
 		ImagePrompt prompt = new ImagePrompt(TEST_PROMPT);
-		ImageResponse response = imageModel.call(prompt);
+		Mono<ImageResponse> responseMono = imageModel.callReactive(prompt);
 
-		assertThat(response.getResults()).isEmpty();
+		// When there's no task ID, the reactive chain should return an empty response
+		StepVerifier.create(responseMono)
+			.assertNext(response -> {
+				assertThat(response.getResults()).isEmpty();
+				assertThat((String) response.getMetadata().get("taskStatus")).isEqualTo("NO_TASK_ID");
+			})
+			.verifyComplete();
 	}
 
 	@Test
 	void testNullPrompt() {
-		// Test handling of null prompt
-		assertThatThrownBy(() -> imageModel.call(null)).isInstanceOf(IllegalArgumentException.class)
+		// Test handling of null prompt reactively
+		assertThatThrownBy(() -> imageModel.callReactive(null)).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("Prompt");
 	}
 
 	@Test
 	void testEmptyPrompt() {
-		// Test handling of empty prompt
-		assertThatThrownBy(() -> imageModel.call(new ImagePrompt(new ArrayList<>())))
+		// Test handling of empty prompt reactively
+		assertThatThrownBy(() -> imageModel.callReactive(new ImagePrompt(new ArrayList<>())))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("Prompt");
+	}
+
+	@Test
+	void testReactiveApiIsPreferred() {
+		// Test that the reactive API is the preferred interface
+		mockSuccessfulImageGeneration();
+
+		ImagePrompt prompt = new ImagePrompt(TEST_PROMPT);
+
+		// Verify reactive method exists and works
+		Mono<ImageResponse> responseMono = imageModel.callReactive(prompt);
+		assertThat(responseMono).isNotNull();
+
+		// Verify we can use reactive patterns
+		StepVerifier.create(responseMono.map(response -> response.getResults().size()).filter(size -> size > 0))
+			.expectNext(1)
+			.verifyComplete();
 	}
 
 	private void mockSuccessfulImageGeneration() {
@@ -149,14 +178,14 @@ class DashScopeImageModelTests {
 		DashScopeImageAsyncReponse submitResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "PENDING", null, null, null, null),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(ResponseEntity.ok(submitResponse));
+		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(Mono.just(submitResponse));
 
 		// Mock successful task completion
 		DashScopeImageAsyncReponse completedResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "SUCCEEDED",
 						List.of(new DashScopeImageAsyncReponseResult(TEST_IMAGE_URL)), null, null, null),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(ResponseEntity.ok(completedResponse));
+		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(Mono.just(completedResponse));
 	}
 
 	private void mockFailedImageGeneration() {
@@ -164,13 +193,13 @@ class DashScopeImageModelTests {
 		DashScopeImageAsyncReponse submitResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "PENDING", null, null, null, null),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(ResponseEntity.ok(submitResponse));
+		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(Mono.just(submitResponse));
 
 		// Mock failed task completion
 		DashScopeImageAsyncReponse failedResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "FAILED", null, null, "ERROR_CODE", "Error message"),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(ResponseEntity.ok(failedResponse));
+		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(Mono.just(failedResponse));
 	}
 
 	private void mockTimeoutImageGeneration() {
@@ -178,13 +207,13 @@ class DashScopeImageModelTests {
 		DashScopeImageAsyncReponse submitResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "PENDING", null, null, null, null),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(ResponseEntity.ok(submitResponse));
+		when(dashScopeImageApi.submitImageGenTask(any())).thenReturn(Mono.just(submitResponse));
 
 		// Mock pending status for all status checks
 		DashScopeImageAsyncReponse pendingResponse = new DashScopeImageAsyncReponse(TEST_REQUEST_ID,
 				new DashScopeImageAsyncReponseOutput(TEST_TASK_ID, "PENDING", null, null, null, null),
 				new DashScopeImageAsyncReponseUsage(1));
-		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(ResponseEntity.ok(pendingResponse));
+		when(dashScopeImageApi.getImageGenTaskResult(TEST_TASK_ID)).thenReturn(Mono.just(pendingResponse));
 	}
 
 }

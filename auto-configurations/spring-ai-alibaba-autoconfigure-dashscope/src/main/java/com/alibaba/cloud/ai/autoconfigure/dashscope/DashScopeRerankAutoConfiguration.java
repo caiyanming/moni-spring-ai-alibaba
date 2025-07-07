@@ -24,13 +24,11 @@ import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.web.client.RestClientAutoConfiguration;
 import org.springframework.boot.autoconfigure.web.reactive.function.client.WebClientAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.web.client.ResponseErrorHandler;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import static com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeConnectionUtils.resolveConnectionProperties;
@@ -40,22 +38,19 @@ import static com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeConnectionUt
  * @author <a href="mailto:yuluo08290126@gmail.com">yuluo</a>
  */
 
-@AutoConfiguration(after = { RestClientAutoConfiguration.class, WebClientAutoConfiguration.class,
-		SpringAiRetryAutoConfiguration.class })
+@AutoConfiguration(after = { WebClientAutoConfiguration.class, SpringAiRetryAutoConfiguration.class })
 @ConditionalOnClass(DashScopeApi.class)
 @ConditionalOnDashScopeEnabled
 @ConditionalOnProperty(prefix = DashScopeRerankProperties.CONFIG_PREFIX, name = "enabled", havingValue = "true",
 		matchIfMissing = true)
 @EnableConfigurationProperties({ DashScopeConnectionProperties.class, DashScopeRerankProperties.class })
-@ImportAutoConfiguration(classes = { SpringAiRetryAutoConfiguration.class, RestClientAutoConfiguration.class,
-		WebClientAutoConfiguration.class })
+@ImportAutoConfiguration(classes = { SpringAiRetryAutoConfiguration.class, WebClientAutoConfiguration.class })
 public class DashScopeRerankAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
 	public DashScopeRerankModel dashscopeRerankModel(DashScopeConnectionProperties commonProperties,
-			DashScopeRerankProperties rerankProperties, RestClient.Builder restClientBuilder,
-			WebClient.Builder webClientBuilder, RetryTemplate retryTemplate,
+			DashScopeRerankProperties rerankProperties, WebClient.Builder webClientBuilder, RetryTemplate retryTemplate,
 			ResponseErrorHandler responseErrorHandler) {
 
 		ResolvedConnectionProperties resolved = resolveConnectionProperties(commonProperties, rerankProperties,
@@ -67,7 +62,6 @@ public class DashScopeRerankAutoConfiguration {
 			.baseUrl(resolved.baseUrl())
 			.webClientBuilder(webClientBuilder)
 			.workSpaceId(resolved.workspaceId())
-			.restClientBuilder(restClientBuilder)
 			.responseErrorHandler(responseErrorHandler)
 			.build();
 

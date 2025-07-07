@@ -38,7 +38,7 @@ import org.springframework.ai.image.ImageResponseMetadata;
 import org.springframework.ai.image.observation.DefaultImageModelObservationConvention;
 import org.springframework.ai.image.observation.ImageModelObservationDocumentation;
 import org.springframework.ai.observation.conventions.AiOperationType;
-import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Mono;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
@@ -122,9 +122,9 @@ class DashScopeImageModelObservationTests {
 		var response = new DashScopeImageAsyncReponse("req-test", output, null);
 
 		Mockito.when(mockApi.submitImageGenTask(any(DashScopeImageRequest.class)))
-			.thenReturn(ResponseEntity.ok(new DashScopeImageAsyncReponse(output.taskId(), output, null)));
+			.thenReturn(Mono.just(new DashScopeImageAsyncReponse(output.taskId(), output, null)));
 
-		Mockito.when(mockApi.getImageGenTaskResult(any(String.class))).thenReturn(ResponseEntity.ok(response));
+		Mockito.when(mockApi.getImageGenTaskResult(any(String.class))).thenReturn(Mono.just(response));
 
 		DashScopeImageModel model = DashScopeImageModel.builder()
 			.dashScopeApi(mockApi)

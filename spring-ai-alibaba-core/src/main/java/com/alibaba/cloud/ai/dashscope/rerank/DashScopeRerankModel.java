@@ -33,10 +33,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.retry.RetryUtils;
-import org.springframework.http.ResponseEntity;
 import org.springframework.lang.Nullable;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+import java.time.Duration;
 
 /**
  * Title Dashscope rerank model.<br>
@@ -80,33 +82,41 @@ public class DashScopeRerankModel implements RerankModel {
 
 	@Override
 	public RerankResponse call(RerankRequest request) {
+		return callReactive(request).block();
+	}
+
+	/**
+	 * Reactive version of rerank - preferred method for non-blocking operations
+	 */
+	public Mono<RerankResponse> callReactive(RerankRequest request) {
 		Assert.notNull(request.getQuery(), "query must not be null");
 		Assert.notNull(request.getInstructions(), "documents must not be null");
 
 		DashScopeRerankOptions requestOptions = mergeOptions(request.getOptions(), this.defaultOptions);
 		DashScopeApi.RerankRequest rerankRequest = createRequest(request, requestOptions);
 
-		ResponseEntity<DashScopeApi.RerankResponse> responseEntity = this.retryTemplate
-			.execute(ctx -> this.dashscopeApi.rerankEntity(rerankRequest));
+		return this.dashscopeApi.rerank(rerankRequest)
+			.retryWhen(Retry.fixedDelay(3, Duration.ofSeconds(1)))
+			.map(response -> {
+				if (response == null) {
+					logger.warn("No rerank returned for query: {}", request.getQuery());
+					return new RerankResponse(Collections.emptyList());
+				}
 
-		var response = responseEntity.getBody();
+				List<DocumentWithScore> documentWithScores = response.output()
+					.results()
+					.stream()
+					.map(data -> DocumentWithScore.builder()
+						.withScore(data.relevanceScore())
+						.withDocument(request.getInstructions().get(data.index()))
+						.build())
+					.toList();
 
-		if (response == null) {
-			logger.warn("No rerank returned for query: {}", request.getQuery());
-			return new RerankResponse(Collections.emptyList());
-		}
-
-		List<DocumentWithScore> documentWithScores = response.output()
-			.results()
-			.stream()
-			.map(data -> DocumentWithScore.builder()
-				.withScore(data.relevanceScore())
-				.withDocument(request.getInstructions().get(data.index()))
-				.build())
-			.toList();
-
-		var metadata = new RerankResponseMetadata(DashScopeAiUsage.from(response.usage()));
-		return new RerankResponse(documentWithScores, metadata);
+				var metadata = new RerankResponseMetadata(DashScopeAiUsage.from(response.usage()));
+				return new RerankResponse(documentWithScores, metadata);
+			})
+			.switchIfEmpty(Mono.just(new RerankResponse(Collections.emptyList())))
+			.onErrorReturn(new RerankResponse(Collections.emptyList()));
 	}
 
 	private DashScopeApi.RerankRequest createRequest(RerankRequest request, DashScopeRerankOptions requestOptions) {

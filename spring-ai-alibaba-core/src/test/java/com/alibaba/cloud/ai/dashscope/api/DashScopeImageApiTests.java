@@ -24,7 +24,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 /**
  * Tests for DashScopeImageApi class functionality
@@ -38,12 +39,12 @@ class DashScopeImageApiTests {
 
 	private DashScopeImageApi imageApi;
 
-	private RestClient mockRestClient;
+	private WebClient mockWebClient;
 
 	@BeforeEach
 	void setUp() {
-		// Setup mock RestClient
-		mockRestClient = mock(RestClient.class);
+		// Setup mock WebClient
+		mockWebClient = mock(WebClient.class);
 
 		// Initialize DashScopeImageApi with test API key
 		imageApi = new DashScopeImageApi("test-api-key");
@@ -139,6 +140,76 @@ class DashScopeImageApiTests {
 				"Result URL should match");
 		assertNotNull(response.usage(), "Usage should not be null");
 		assertEquals(1, response.usage().imageCount(), "Image count should match");
+	}
+
+	@Test
+	void testSubmitImageGenTaskReactive() {
+		// Test reactive image generation task submission
+		DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestInput input = new DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestInput(
+				"Test prompt", null, null, null, null, null, null);
+
+		DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestParameter parameter = new DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestParameter(
+				"anime", "1024*1024", 1, null, null, null, null, null, null, null, null, null);
+
+		DashScopeImageApi.DashScopeImageRequest request = new DashScopeImageApi.DashScopeImageRequest("wanx-v1", input,
+				parameter);
+
+		// Create mock response
+		DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseOutput output = new DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseOutput(
+				"task-123", "RUNNING", null, null, null, null);
+
+		DashScopeImageApi.DashScopeImageAsyncReponse mockResponse = new DashScopeImageApi.DashScopeImageAsyncReponse(
+				"req-123", output, null);
+
+		// Test that the method returns a Mono (reactive)
+		Mono<DashScopeImageApi.DashScopeImageAsyncReponse> result = imageApi.submitImageGenTask(request);
+		assertNotNull(result, "Reactive method should return Mono");
+	}
+
+	@Test
+	void testGetImageGenTaskResultReactive() {
+		// Test reactive task result retrieval
+		String taskId = "task-123";
+
+		// Create mock response
+		DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseResult resultItem = new DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseResult(
+				"https://example.com/image.png");
+
+		List<DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseResult> results = Collections
+			.singletonList(resultItem);
+
+		DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseOutput output = new DashScopeImageApi.DashScopeImageAsyncReponse.DashScopeImageAsyncReponseOutput(
+				taskId, "SUCCEEDED", results, null, null, null);
+
+		DashScopeImageApi.DashScopeImageAsyncReponse mockResponse = new DashScopeImageApi.DashScopeImageAsyncReponse(
+				"req-123", output, null);
+
+		// Test that the method returns a Mono (reactive)
+		Mono<DashScopeImageApi.DashScopeImageAsyncReponse> result = imageApi.getImageGenTaskResult(taskId);
+		assertNotNull(result, "Reactive method should return Mono");
+	}
+
+	@Test
+	void testReactiveMethodsReturnMonos() {
+		// Test that all reactive methods return proper Mono types
+		DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestInput input = new DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestInput(
+				"Test prompt", null, null, null, null, null, null);
+
+		DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestParameter parameter = new DashScopeImageApi.DashScopeImageRequest.DashScopeImageRequestParameter(
+				null, null, null, null, null, null, null, null, null, null, null, null);
+
+		DashScopeImageApi.DashScopeImageRequest request = new DashScopeImageApi.DashScopeImageRequest("wanx-v1", input,
+				parameter);
+
+		// Verify submitImageGenTask returns Mono
+		Mono<DashScopeImageApi.DashScopeImageAsyncReponse> submitResult = imageApi.submitImageGenTask(request);
+		assertNotNull(submitResult, "submitImageGenTask should return Mono");
+		assertNotNull(submitResult, "submitImageGenTask should return Mono type");
+
+		// Verify getImageGenTaskResult returns Mono
+		Mono<DashScopeImageApi.DashScopeImageAsyncReponse> getResult = imageApi.getImageGenTaskResult("task-123");
+		assertNotNull(getResult, "getImageGenTaskResult should return Mono");
+		assertNotNull(getResult, "getImageGenTaskResult should return Mono type");
 	}
 
 }

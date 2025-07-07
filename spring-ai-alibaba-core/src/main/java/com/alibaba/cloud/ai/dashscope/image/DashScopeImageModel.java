@@ -16,10 +16,8 @@
 package com.alibaba.cloud.ai.dashscope.image;
 
 import com.alibaba.cloud.ai.dashscope.api.DashScopeImageApi;
-import com.alibaba.cloud.ai.dashscope.common.DashScopeApiConstants;
 import com.alibaba.cloud.ai.dashscope.image.observation.DashScopeImageModelObservationConvention;
 import com.alibaba.cloud.ai.dashscope.image.observation.DashScopeImagePromptContentObservationHandler;
-import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
@@ -35,19 +33,16 @@ import org.springframework.ai.image.ImageResponseMetadata;
 import org.springframework.ai.image.observation.DefaultImageModelObservationConvention;
 import org.springframework.ai.image.observation.ImageModelObservationContext;
 import org.springframework.ai.image.observation.ImageModelObservationConvention;
-import org.springframework.ai.image.observation.ImageModelObservationDocumentation;
 import org.springframework.ai.model.ModelOptionsUtils;
-import org.springframework.ai.retry.RetryUtils;
-import org.springframework.http.ResponseEntity;
-import org.springframework.retry.backoff.FixedBackOffPolicy;
-import org.springframework.retry.policy.SimpleRetryPolicy;
-import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.time.Duration;
 
 /**
  * @author nuocheng.lxm
@@ -77,11 +72,6 @@ public class DashScopeImageModel implements ImageModel {
 	private final DashScopeImageOptions defaultOptions;
 
 	/**
-	 * The retry template used to retry the OpenAI Image API calls.
-	 */
-	private final RetryTemplate retryTemplate;
-
-	/**
 	 * Observation registry used for instrumentation.
 	 */
 	private final ObservationRegistry observationRegistry;
@@ -91,43 +81,31 @@ public class DashScopeImageModel implements ImageModel {
 	 */
 	private ImageModelObservationConvention observationConvention = new DefaultImageModelObservationConvention();
 
-	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi, DashScopeImageOptions options,
-			RetryTemplate retryTemplate) {
-		this(dashScopeImageApi, options, retryTemplate, ObservationRegistry.NOOP);
+	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi, DashScopeImageOptions options) {
+		this(dashScopeImageApi, options, ObservationRegistry.NOOP);
 	}
 
 	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi) {
 		this(dashScopeImageApi,
 				DashScopeImageOptions.builder().withModel(DashScopeImageApi.DEFAULT_IMAGE_MODEL).build(),
-				RetryUtils.DEFAULT_RETRY_TEMPLATE, ObservationRegistry.NOOP);
-	}
-
-	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi, DashScopeImageOptions options) {
-		this(dashScopeImageApi, options, RetryUtils.DEFAULT_RETRY_TEMPLATE, ObservationRegistry.NOOP);
+				ObservationRegistry.NOOP);
 	}
 
 	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi, ObservationRegistry observationRegistry) {
 		this(dashScopeImageApi,
 				DashScopeImageOptions.builder().withModel(DashScopeImageApi.DEFAULT_IMAGE_MODEL).build(),
-				RetryUtils.DEFAULT_RETRY_TEMPLATE, observationRegistry);
+				observationRegistry);
 	}
 
 	public DashScopeImageModel(DashScopeImageApi dashScopeImageApi, DashScopeImageOptions options,
-			RetryTemplate retryTemplate, ObservationRegistry observationRegistry) {
+			ObservationRegistry observationRegistry) {
 
 		Assert.notNull(dashScopeImageApi, "DashScopeImageApi must not be null");
 		Assert.notNull(options, "options must not be null");
-		Assert.notNull(retryTemplate, "retryTemplate must not be null");
 		Assert.notNull(observationRegistry, "observationRegistry must not be null");
 
 		this.dashScopeImageApi = dashScopeImageApi;
 		this.defaultOptions = options;
-		SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(MAX_RETRY_COUNT);
-		FixedBackOffPolicy backOff = new FixedBackOffPolicy();
-		backOff.setBackOffPeriod(15_000L);
-		retryTemplate.setRetryPolicy(retryPolicy);
-		retryTemplate.setBackOffPolicy(backOff);
-		this.retryTemplate = retryTemplate;
 		this.observationRegistry = observationRegistry;
 
 		this.observationRegistry.observationConfig()
@@ -142,64 +120,31 @@ public class DashScopeImageModel implements ImageModel {
 
 	@Override
 	public ImageResponse call(ImagePrompt request) {
-		Assert.notNull(request, "Prompt must not be null");
-		Assert.isTrue(!CollectionUtils.isEmpty(request.getInstructions()), "Prompt messages must " + "not be empty");
-
-		String taskId = submitImageGenTask(request);
-		if (taskId == null) {
-			return new ImageResponse(List.of(), toMetadataEmpty());
-		}
-
-		ImageModelObservationContext observationContext = ImageModelObservationContext.builder()
-			.imagePrompt(request)
-			.provider(DashScopeApiConstants.PROVIDER_NAME)
-			.build();
-
-		Observation observation = ImageModelObservationDocumentation.IMAGE_MODEL_OPERATION.observation(
-				observationConvention, new DefaultImageModelObservationConvention(), () -> observationContext,
-				this.observationRegistry);
-
-		return observation.observe(() ->
-
-		retryTemplate.execute(ctx -> {
-			observation.lowCardinalityKeyValue("retry.attempt", String.valueOf(ctx.getRetryCount()));
-
-			DashScopeImageApi.DashScopeImageAsyncReponse resp = getImageGenTask(taskId);
-			if (resp != null) {
-				String status = resp.output().taskStatus();
-				observation.lowCardinalityKeyValue("task.status", status);
-
-				switch (status) {
-					case "SUCCEEDED":
-						return toImageResponse(resp);
-					case "FAILED":
-					case "UNKNOWN":
-						return new ImageResponse(List.of(), toMetadata(resp));
-				}
-			}
-			throw new RuntimeException("Image generation still pending");
-		}, context -> {
-			observation.lowCardinalityKeyValue("timeout", "true");
-			return new ImageResponse(List.of(), toMetadataTimeout(taskId));
-		}));
+		return callReactive(request).block();
 	}
 
-	public String submitImageGenTask(ImagePrompt request) {
+	/**
+	 * Reactive version of image generation - preferred method for non-blocking operations
+	 */
+	public Mono<ImageResponse> callReactive(ImagePrompt request) {
+		Assert.notNull(request, "Prompt must not be null");
+		Assert.isTrue(!CollectionUtils.isEmpty(request.getInstructions()), "Prompt messages must not be empty");
 
+		return submitImageGenTask(request)
+			.flatMap(taskId -> pollImageGenTask(taskId).map(this::toImageResponse)
+				.onErrorReturn(new ImageResponse(List.of(), toMetadataTimeout(taskId))))
+			.switchIfEmpty(Mono.just(new ImageResponse(List.of(), toMetadataEmpty())));
+	}
+
+	public Mono<String> submitImageGenTask(ImagePrompt request) {
 		DashScopeImageOptions imageOptions = toImageOptions(request.getOptions());
 		logger.debug("Image options: {}", imageOptions);
 
 		DashScopeImageApi.DashScopeImageRequest dashScopeImageRequest = constructImageRequest(request, imageOptions);
 
-		ResponseEntity<DashScopeImageApi.DashScopeImageAsyncReponse> submitResponse = dashScopeImageApi
-			.submitImageGenTask(dashScopeImageRequest);
-
-		if (submitResponse == null || submitResponse.getBody() == null) {
-			logger.warn("Submit imageGen error,request: {}", request);
-			return null;
-		}
-
-		return submitResponse.getBody().output().taskId();
+		return dashScopeImageApi.submitImageGenTask(dashScopeImageRequest)
+			.map(response -> response.output().taskId())
+			.doOnError(error -> logger.warn("Submit imageGen error, request: {}", request, error));
 	}
 
 	/**
@@ -221,14 +166,25 @@ public class DashScopeImageModel implements ImageModel {
 		return currentOptions;
 	}
 
-	public DashScopeImageApi.DashScopeImageAsyncReponse getImageGenTask(String taskId) {
-		ResponseEntity<DashScopeImageApi.DashScopeImageAsyncReponse> getImageGenResponse = dashScopeImageApi
-			.getImageGenTaskResult(taskId);
-		if (getImageGenResponse == null || getImageGenResponse.getBody() == null) {
-			logger.warn("No image response returned for taskId: {}", taskId);
-			return null;
-		}
-		return getImageGenResponse.getBody();
+	public Mono<DashScopeImageApi.DashScopeImageAsyncReponse> pollImageGenTask(String taskId) {
+		return dashScopeImageApi.getImageGenTaskResult(taskId).flatMap(response -> {
+			if (response != null && response.output() != null) {
+				String status = response.output().taskStatus();
+				switch (status) {
+					case "SUCCEEDED":
+						return Mono.just(response);
+					case "FAILED":
+					case "UNKNOWN":
+						return Mono.error(new RuntimeException("Image generation failed with status: " + status));
+					default:
+						return Mono.error(new RuntimeException("Image generation still pending"));
+				}
+			}
+			return Mono.error(new RuntimeException("No response received for taskId: " + taskId));
+		})
+			.retryWhen(Retry.fixedDelay(MAX_RETRY_COUNT, Duration.ofSeconds(15))
+				.filter(throwable -> throwable.getMessage().contains("still pending")))
+			.timeout(Duration.ofMinutes(10));
 	}
 
 	public DashScopeImageOptions getOptions() {
@@ -314,8 +270,6 @@ public class DashScopeImageModel implements ImageModel {
 			.withN(1)
 			.build();
 
-		private RetryTemplate retryTemplate = RetryUtils.DEFAULT_RETRY_TEMPLATE;
-
 		private ObservationRegistry observationRegistry = ObservationRegistry.NOOP;
 
 		private ImageModelObservationConvention observationConvention = new DashScopeImageModelObservationConvention();
@@ -335,11 +289,6 @@ public class DashScopeImageModel implements ImageModel {
 			return this;
 		}
 
-		public Builder retryTemplate(RetryTemplate retryTemplate) {
-			this.retryTemplate = retryTemplate;
-			return this;
-		}
-
 		public Builder observationRegistry(ObservationRegistry observationRegistry) {
 			this.observationRegistry = observationRegistry;
 			return this;
@@ -356,8 +305,7 @@ public class DashScopeImageModel implements ImageModel {
 		}
 
 		public DashScopeImageModel build() {
-			DashScopeImageModel model = new DashScopeImageModel(dashScopeImageApi, defaultOptions, retryTemplate,
-					observationRegistry);
+			DashScopeImageModel model = new DashScopeImageModel(dashScopeImageApi, defaultOptions, observationRegistry);
 
 			model.setObservationConvention(this.observationConvention);
 			this.observationRegistry.observationConfig().observationHandler(this.promptHandler);

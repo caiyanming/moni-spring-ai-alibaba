@@ -20,11 +20,8 @@ import java.util.List;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import org.springframework.ai.retry.RetryUtils;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.client.ResponseErrorHandler;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import static com.alibaba.cloud.ai.dashscope.common.DashScopeApiConstants.DEFAULT_BASE_URL;
 
@@ -36,40 +33,33 @@ public class DashScopeImageApi {
 
 	public static final String DEFAULT_IMAGE_MODEL = ImageModel.WANX_V1.getValue();
 
-	private final RestClient restClient;
+	private final WebClient webClient;
 
 	public DashScopeImageApi(String apiKey) {
-		this(DEFAULT_BASE_URL, apiKey, RestClient.builder(), WebClient.builder(),
-				RetryUtils.DEFAULT_RESPONSE_ERROR_HANDLER);
+		this(DEFAULT_BASE_URL, apiKey, WebClient.builder());
 	}
 
 	public DashScopeImageApi(String apiKey, String workSpaceId) {
-		this(DEFAULT_BASE_URL, apiKey, workSpaceId, RestClient.builder(), WebClient.builder(),
-				RetryUtils.DEFAULT_RESPONSE_ERROR_HANDLER);
+		this(DEFAULT_BASE_URL, apiKey, workSpaceId, WebClient.builder());
 	}
 
 	public DashScopeImageApi(String baseUrl, String apiKey, String workSpaceId) {
-		this(baseUrl, apiKey, workSpaceId, RestClient.builder(), WebClient.builder(),
-				RetryUtils.DEFAULT_RESPONSE_ERROR_HANDLER);
+		this(baseUrl, apiKey, workSpaceId, WebClient.builder());
 	}
 
-	public DashScopeImageApi(String baseUrl, String apiKey, RestClient.Builder restClientBuilder,
-			WebClient.Builder webClientBuilder, ResponseErrorHandler responseErrorHandler) {
-		this.restClient = restClientBuilder.baseUrl(baseUrl)
-			.defaultHeaders(ApiUtils.getJsonContentHeaders(apiKey))
-			.defaultStatusHandler(responseErrorHandler)
+	public DashScopeImageApi(String baseUrl, String apiKey, WebClient.Builder webClientBuilder) {
+		this.webClient = webClientBuilder.baseUrl(baseUrl)
+			.defaultHeaders(ApiUtils.getJsonContentHeaders(apiKey, null, true))
 			.build();
 	}
 
-	public DashScopeImageApi(String baseUrl, String apiKey, String workSpaceId, RestClient.Builder restClientBuilder,
-			WebClient.Builder webClientBuilder, ResponseErrorHandler responseErrorHandler) {
-		this.restClient = restClientBuilder.baseUrl(baseUrl)
-			.defaultHeaders(ApiUtils.getJsonContentHeaders(apiKey, workSpaceId))
-			.defaultStatusHandler(responseErrorHandler)
+	public DashScopeImageApi(String baseUrl, String apiKey, String workSpaceId, WebClient.Builder webClientBuilder) {
+		this.webClient = webClientBuilder.baseUrl(baseUrl)
+			.defaultHeaders(ApiUtils.getJsonContentHeaders(apiKey, workSpaceId, true))
 			.build();
 	}
 
-	public ResponseEntity<DashScopeImageAsyncReponse> submitImageGenTask(DashScopeImageRequest request) {
+	public Mono<DashScopeImageAsyncReponse> submitImageGenTask(DashScopeImageRequest request) {
 		String url = "/api/v1/services/aigc/";
 		if (request.model().equals("wanx2.1-imageedit") || request.model().equals("wanx-x-painting")
 				|| request.model().equals("wanx-sketch-to-image-lite"))
@@ -77,20 +67,20 @@ public class DashScopeImageApi {
 		else
 			url += "text2image";
 		url += "/image-synthesis";
-		return this.restClient.post()
+
+		return this.webClient.post()
 			.uri(url)
-			// issue: https://github.com/alibaba/spring-ai-alibaba/issues/29
 			.header("X-DashScope-Async", "enable")
-			.body(request)
+			.body(Mono.just(request), DashScopeImageRequest.class)
 			.retrieve()
-			.toEntity(DashScopeImageAsyncReponse.class);
+			.bodyToMono(DashScopeImageAsyncReponse.class);
 	}
 
-	public ResponseEntity<DashScopeImageAsyncReponse> getImageGenTaskResult(String taskId) {
-		return this.restClient.get()
+	public Mono<DashScopeImageAsyncReponse> getImageGenTaskResult(String taskId) {
+		return this.webClient.get()
 			.uri("/api/v1/tasks/{task_id}", taskId)
 			.retrieve()
-			.toEntity(DashScopeImageAsyncReponse.class);
+			.bodyToMono(DashScopeImageAsyncReponse.class);
 	}
 
 	/*******************************************

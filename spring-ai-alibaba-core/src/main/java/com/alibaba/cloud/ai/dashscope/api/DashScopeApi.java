@@ -1674,18 +1674,25 @@ public class DashScopeApi {
 
 	/**
 	 * Creates rerank request for dashscope rerank model.
-	 * @param rerankRequest The chat completion request.
-	 * @return Entity response with {@link ChatCompletion} as a body and HTTP status code
-	 * and headers.
+	 * @param rerankRequest The rerank request.
+	 * @return Reactive response with {@link RerankResponse} as a body.
 	 */
-	public ResponseEntity<RerankResponse> rerankEntity(RerankRequest rerankRequest) {
+	public Mono<RerankResponse> rerank(RerankRequest rerankRequest) {
 		Assert.notNull(rerankRequest, "The request body can not be null.");
 
-		return this.restClient.post()
+		return this.webClient.post()
 			.uri("/api/v1/services/rerank/text-rerank/text-rerank")
-			.body(rerankRequest)
+			.bodyValue(rerankRequest)
 			.retrieve()
-			.toEntity(RerankResponse.class);
+			.bodyToMono(RerankResponse.class);
+	}
+
+	/**
+	 * @deprecated Use {@link #rerank(RerankRequest)} instead for reactive operations.
+	 */
+	@Deprecated(since = "1.0.0.3", forRemoval = true)
+	public ResponseEntity<RerankResponse> rerankEntity(RerankRequest rerankRequest) {
+		return rerank(rerankRequest).map(response -> ResponseEntity.ok(response)).block();
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)

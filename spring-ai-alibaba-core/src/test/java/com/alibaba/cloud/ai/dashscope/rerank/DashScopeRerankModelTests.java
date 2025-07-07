@@ -28,7 +28,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.document.Document;
-import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -145,7 +146,7 @@ class DashScopeRerankModelTests {
 		TokenUsage usage = new TokenUsage(10, 20, 30);
 		RerankResponse apiResponse = new RerankResponse(output, usage, "test-request-id");
 
-		when(dashScopeApi.rerankEntity(any())).thenReturn(ResponseEntity.ok(apiResponse));
+		when(dashScopeApi.rerank(any())).thenReturn(Mono.just(apiResponse));
 
 		// Execute rerank
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
@@ -171,7 +172,7 @@ class DashScopeRerankModelTests {
 		List<Document> documents = Collections.singletonList(doc);
 
 		// Mock empty API response
-		when(dashScopeApi.rerankEntity(any())).thenReturn(ResponseEntity.ok(null));
+		when(dashScopeApi.rerank(any())).thenReturn(Mono.empty());
 
 		// Execute rerank
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
@@ -203,7 +204,7 @@ class DashScopeRerankModelTests {
 		RerankResponseOutput output = new RerankResponseOutput(Collections.singletonList(result));
 		RerankResponse apiResponse = new RerankResponse(output, new TokenUsage(10, 20, 30), "test-request-id");
 
-		when(dashScopeApi.rerankEntity(any())).thenReturn(ResponseEntity.ok(apiResponse));
+		when(dashScopeApi.rerank(any())).thenReturn(Mono.just(apiResponse));
 
 		// Execute rerank with custom options
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents, customOptions);
@@ -212,6 +213,60 @@ class DashScopeRerankModelTests {
 		// Verify results
 		assertThat(response.getResults()).hasSize(1);
 		assertThat(response.getResults().get(0).getScore()).isEqualTo(TEST_SCORE);
+	}
+
+	/**
+	 * Test reactive reranking. Verifies that reactive reranking works correctly.
+	 */
+	@Test
+	void testReactiveRerank() {
+		// Prepare test data
+		Document doc1 = new Document("Document 1");
+		Document doc2 = new Document("Document 2");
+		List<Document> documents = Arrays.asList(doc1, doc2);
+
+		// Mock API response
+		RerankResponseOutputResult result1 = new RerankResponseOutputResult(0, 0.9, new HashMap<>());
+		RerankResponseOutputResult result2 = new RerankResponseOutputResult(1, 0.7, new HashMap<>());
+		RerankResponseOutput output = new RerankResponseOutput(Arrays.asList(result1, result2));
+		TokenUsage usage = new TokenUsage(10, 20, 30);
+		RerankResponse apiResponse = new RerankResponse(output, usage, "test-request-id");
+
+		when(dashScopeApi.rerank(any())).thenReturn(Mono.just(apiResponse));
+
+		// Execute reactive rerank
+		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
+		Mono<com.alibaba.cloud.ai.model.RerankResponse> responseMono = rerankModel.callReactive(request);
+
+		// Verify reactive results
+		StepVerifier.create(responseMono).assertNext(response -> {
+			List<DocumentWithScore> results = response.getResults();
+			assertThat(results).hasSize(2);
+			assertThat(results.get(0).getScore()).isEqualTo(0.9);
+			assertThat(results.get(1).getScore()).isEqualTo(0.7);
+		}).verifyComplete();
+	}
+
+	/**
+	 * Test reactive reranking with error. Verifies error handling in reactive flow.
+	 */
+	@Test
+	void testReactiveRerankWithError() {
+		// Prepare test data
+		Document doc = new Document(TEST_DOC_TEXT);
+		List<Document> documents = Collections.singletonList(doc);
+
+		// Mock API error
+		when(dashScopeApi.rerank(any())).thenReturn(Mono.error(new RuntimeException("API Error")));
+
+		// Execute reactive rerank
+		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
+		Mono<com.alibaba.cloud.ai.model.RerankResponse> responseMono = rerankModel.callReactive(request);
+
+		// Verify error handling returns empty results
+		StepVerifier.create(responseMono)
+			.assertNext(response -> assertThat(response.getResults()).isEmpty())
+			.verifyComplete();
 	}
 
 }
