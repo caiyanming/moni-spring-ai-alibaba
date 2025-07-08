@@ -40,6 +40,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
@@ -166,7 +167,8 @@ class RetrievalRerankAdvisorTests {
 
 		// 设置 Mock 行为
 		when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(documents);
-		when(rerankModel.call(any(RerankRequest.class))).thenReturn(new RerankResponse(List.of(documentWithScore)));
+		when(rerankModel.call(any(RerankRequest.class)))
+			.thenReturn(Mono.just(new RerankResponse(List.of(documentWithScore))));
 		when(callChain.nextCall(any())).thenReturn(mockResponse);
 
 		// 执行测试
@@ -227,7 +229,8 @@ class RetrievalRerankAdvisorTests {
 
 		// 设置 Mock 行为
 		when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(documents);
-		when(rerankModel.call(any(RerankRequest.class))).thenReturn(new RerankResponse(List.of(documentWithScore)));
+		when(rerankModel.call(any(RerankRequest.class)))
+			.thenReturn(Mono.just(new RerankResponse(List.of(documentWithScore))));
 		when(streamChain.nextStream(any())).thenReturn(Flux.just(testResponse));
 
 		// 执行测试
@@ -302,7 +305,8 @@ class RetrievalRerankAdvisorTests {
 
 		// 设置 Mock 行为
 		when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(documents);
-		when(rerankModel.call(any(RerankRequest.class))).thenReturn(new RerankResponse(List.of(documentWithScore)));
+		when(rerankModel.call(any(RerankRequest.class)))
+			.thenReturn(Mono.just(new RerankResponse(List.of(documentWithScore))));
 		when(callChain.nextCall(any())).thenReturn(mockResponse);
 
 		// 执行测试

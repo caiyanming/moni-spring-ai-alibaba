@@ -39,11 +39,11 @@ import org.springframework.ai.embedding.EmbeddingResponseMetadata;
 import org.springframework.ai.embedding.observation.DefaultEmbeddingModelObservationConvention;
 import org.springframework.ai.embedding.observation.EmbeddingModelObservationContext;
 import org.springframework.ai.embedding.observation.EmbeddingModelObservationConvention;
-import org.springframework.ai.embedding.observation.EmbeddingModelObservationDocumentation;
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.retry.RetryUtils;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
+import reactor.core.publisher.Mono;
 
 /**
  * DashScope Embedding Model implementation.
@@ -116,13 +116,13 @@ public class DashScopeEmbeddingModel extends AbstractEmbeddingModel {
 	}
 
 	@Override
-	public float[] embed(Document document) {
+	public Mono<float[]> embed(Document document) {
 		Assert.notNull(document, "Document must not be null");
 		return this.embed(document.getFormattedContent(this.metadataMode));
 	}
 
 	@Override
-	public EmbeddingResponse call(EmbeddingRequest request) {
+	public Mono<EmbeddingResponse> call(EmbeddingRequest request) {
 		// Before moving any further, build the final request EmbeddingRequest,
 		// merging runtime and default options.
 		EmbeddingRequest embeddingRequest = buildEmbeddingRequest(request);
@@ -134,48 +134,37 @@ public class DashScopeEmbeddingModel extends AbstractEmbeddingModel {
 			.provider(DashScopeApiConstants.PROVIDER_NAME)
 			.build();
 
-		return EmbeddingModelObservationDocumentation.EMBEDDING_MODEL_OPERATION
-			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
-					this.observationRegistry)
-			.observe(() -> {
-				DashScopeApi.EmbeddingList apiEmbeddingResponse = this.retryTemplate.execute(ctx -> {
-					try {
-						return this.dashScopeApi.embeddings(apiRequest).getBody();
-					}
-					catch (Exception e) {
-						logger.error("Error embedding request: {}", request.getInstructions(), e);
-						throw e;
-					}
-				});
+		// Use reactive embeddings call - pure reactive implementation!
+		return this.dashScopeApi.embeddings(apiRequest).map(apiEmbeddingResponse -> {
 
-				if (apiEmbeddingResponse == null) {
-					logger.warn("No embeddings returned for request: {}", request);
-					return new EmbeddingResponse(List.of());
-				}
+			if (apiEmbeddingResponse == null) {
+				logger.warn("No embeddings returned for request: {}", request);
+				return new EmbeddingResponse(List.of());
+			}
 
-				if (apiEmbeddingResponse.message() != null) {
-					logger.error("Error message returned for request: {}", apiEmbeddingResponse.message());
-					throw new RuntimeException("Embedding failed: error code:" + apiEmbeddingResponse.code()
-							+ ", message:" + apiEmbeddingResponse.message());
-				}
+			if (apiEmbeddingResponse.message() != null) {
+				logger.error("Error message returned for request: {}", apiEmbeddingResponse.message());
+				throw new RuntimeException("Embedding failed: error code:" + apiEmbeddingResponse.code() + ", message:"
+						+ apiEmbeddingResponse.message());
+			}
 
-				DashScopeApi.EmbeddingUsage usage = apiEmbeddingResponse.usage();
+			DashScopeApi.EmbeddingUsage usage = apiEmbeddingResponse.usage();
 
-				Usage embeddingUsage = usage != null ? this.getDefaultUsage(usage) : new EmptyUsage();
+			Usage embeddingUsage = usage != null ? this.getDefaultUsage(usage) : new EmptyUsage();
 
-				var metadata = generateResponseMetadata(apiRequest.model(), embeddingUsage);
-				List<Embedding> embeddings = apiEmbeddingResponse.output()
-					.embeddings()
-					.stream()
-					.map(e -> new Embedding(e.embedding(), e.textIndex()))
-					.toList();
+			var metadata = generateResponseMetadata(apiRequest.model(), embeddingUsage);
+			List<Embedding> embeddings = apiEmbeddingResponse.output()
+				.embeddings()
+				.stream()
+				.map(e -> new Embedding(e.embedding(), e.textIndex()))
+				.toList();
 
-				EmbeddingResponse embeddingResponse = new EmbeddingResponse(embeddings, metadata);
+			EmbeddingResponse embeddingResponse = new EmbeddingResponse(embeddings, metadata);
 
-				observationContext.setResponse(embeddingResponse);
+			observationContext.setResponse(embeddingResponse);
 
-				return embeddingResponse;
-			});
+			return embeddingResponse;
+		});
 	}
 
 	private DefaultUsage getDefaultUsage(DashScopeApi.EmbeddingUsage usage) {

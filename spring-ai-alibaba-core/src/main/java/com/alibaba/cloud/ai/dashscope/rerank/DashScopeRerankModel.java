@@ -81,7 +81,12 @@ public class DashScopeRerankModel implements RerankModel {
 	}
 
 	@Override
-	public RerankResponse call(RerankRequest request) {
+	public Mono<RerankResponse> call(RerankRequest request) {
+		return callReactive(request);
+	}
+
+	// Synchronous version for backward compatibility
+	public RerankResponse callSync(RerankRequest request) {
 		return callReactive(request).block();
 	}
 

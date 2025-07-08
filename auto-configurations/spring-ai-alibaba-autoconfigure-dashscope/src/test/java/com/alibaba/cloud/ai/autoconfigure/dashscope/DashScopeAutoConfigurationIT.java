@@ -74,7 +74,7 @@ public class DashScopeAutoConfigurationIT {
 
 		this.contextRunner.run(context -> {
 			DashScopeChatModel chatModel = context.getBean(DashScopeChatModel.class);
-			String response = chatModel.call("Hello");
+			String response = chatModel.call("Hello").block();
 			assertThat(response).isNotEmpty();
 			logger.info("Response: " + response);
 		});
@@ -106,6 +106,7 @@ public class DashScopeAutoConfigurationIT {
 						DashScopeSpeechSynthesisOptions.builder()
 							.responseFormat(DashScopeSpeechSynthesisApi.ResponseFormat.MP3)
 							.build()))
+				.block()
 				.getResult()
 				.getOutput()
 				.getAudio()
@@ -161,7 +162,8 @@ public class DashScopeAutoConfigurationIT {
 			DashScopeEmbeddingModel embeddingModel = context.getBean(DashScopeEmbeddingModel.class);
 
 			EmbeddingResponse embeddingResponse = embeddingModel
-				.embedForResponse(List.of("Hello World", "World is big and salvation is near"));
+				.embedForResponse(List.of("Hello World", "World is big and salvation is near"))
+				.block();
 			assertThat(embeddingResponse.getResults()).hasSize(2);
 			assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
 			assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
@@ -178,7 +180,8 @@ public class DashScopeAutoConfigurationIT {
 			DashScopeEmbeddingModel embeddingModel = context.getBean(DashScopeEmbeddingModel.class);
 
 			EmbeddingResponse embeddingResponse = embeddingModel
-				.embedForResponse(List.of("Hello World", "World is big and salvation is near"));
+				.embedForResponse(List.of("Hello World", "World is big and salvation is near"))
+				.block();
 			assertThat(embeddingResponse.getResults()).hasSize(2);
 			assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
 			assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
@@ -194,7 +197,7 @@ public class DashScopeAutoConfigurationIT {
 	void generateImage() {
 		this.contextRunner.withPropertyValues("spring.ai.dashScope.image.options.size=1024x1024").run(context -> {
 			DashScopeImageModel imageModel = context.getBean(DashScopeImageModel.class);
-			ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree"));
+			ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree")).block();
 			System.out.println(imageResponse.getResult().getOutput().getUrl());
 			assertThat(imageResponse.getResults()).hasSize(1);
 			assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
@@ -210,7 +213,7 @@ public class DashScopeAutoConfigurationIT {
 					"spring.ai.dashScope.image.options.size=256x256")
 			.run(context -> {
 				DashScopeImageModel imageModel = context.getBean(DashScopeImageModel.class);
-				ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree"));
+				ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree")).block();
 				assertThat(imageResponse.getResults()).hasSize(1);
 				assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
 				logger.info("Generated image: " + imageResponse.getResult().getOutput().getUrl());

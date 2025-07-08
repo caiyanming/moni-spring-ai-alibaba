@@ -142,7 +142,7 @@ public class TairVectorStore extends AbstractObservationVectorStore {
 
 		for (Document document : documents) {
 			logger.info("Calling EmbeddingModel for document id = {}", document.getId());
-			float[] embedding = this.embeddingModel.embed(document);
+			float[] embedding = this.embeddingModel.embed(document).block();
 			String embeddingString = null;
 			try {
 				embeddingString = objectMapper.writeValueAsString(embedding);
@@ -217,7 +217,7 @@ public class TairVectorStore extends AbstractObservationVectorStore {
 	 * @return The embedding for the user query.
 	 */
 	protected float[] getUserQueryEmbedding(String query) {
-		return this.embeddingModel.embed(query);
+		return this.embeddingModel.embed(query).block();
 	}
 
 	@Override

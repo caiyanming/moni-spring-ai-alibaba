@@ -119,7 +119,12 @@ public class DashScopeImageModel implements ImageModel {
 	}
 
 	@Override
-	public ImageResponse call(ImagePrompt request) {
+	public Mono<ImageResponse> call(ImagePrompt request) {
+		return callReactive(request);
+	}
+
+	// Synchronous version for backward compatibility
+	public ImageResponse callSync(ImagePrompt request) {
 		return callReactive(request).block();
 	}
 

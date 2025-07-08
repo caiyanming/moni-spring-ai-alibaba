@@ -168,7 +168,7 @@ public class ChatModelDelegateImpl implements ChatModelDelegate {
 			}
 			Message userMessage = new UserMessage(input);
 			messages.add(userMessage);
-			ChatResponse response = chatModel.call(new Prompt(messages));
+			ChatResponse response = chatModel.call(new Prompt(messages)).block();
 			String resp = response.getResult().getOutput().getText();
 			return ChatModelRunResult.builder()
 				.input(runActionParam)
@@ -226,7 +226,7 @@ public class ChatModelDelegateImpl implements ChatModelDelegate {
 		ImageMessage userMessage = new ImageMessage(input);
 		messages.add(userMessage);
 
-		ImageResponse imageResponse = dashScopeImageModel.call(new ImagePrompt(messages, options));
+		ImageResponse imageResponse = dashScopeImageModel.call(new ImagePrompt(messages, options)).block();
 		return imageResponse.getResult().getOutput().getUrl();
 	}
 

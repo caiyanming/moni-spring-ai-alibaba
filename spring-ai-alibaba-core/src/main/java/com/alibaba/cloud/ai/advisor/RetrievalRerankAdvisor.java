@@ -141,7 +141,7 @@ public class RetrievalRerankAdvisor implements BaseAdvisor {
 
 		var rerankRequest = new RerankRequest(request.prompt().getUserMessage().getText(), documents);
 
-		RerankResponse response = rerankModel.call(rerankRequest);
+		RerankResponse response = rerankModel.call(rerankRequest).block();
 		logger.debug("reranked documents: {}", response);
 		if (response == null || response.getResults() == null) {
 			return documents;

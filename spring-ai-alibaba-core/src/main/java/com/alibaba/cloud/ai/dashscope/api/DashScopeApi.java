@@ -505,19 +505,26 @@ public class DashScopeApi {
 		}
 	}
 
-	public ResponseEntity<EmbeddingList> embeddings(EmbeddingRequest embeddingRequest) {
+	/**
+	 * Creates embeddings for the given text inputs. Pure reactive implementation using
+	 * WebClient.
+	 * @param embeddingRequest The embedding request.
+	 * @return Mono of EmbeddingList response
+	 */
+	public Mono<EmbeddingList> embeddings(EmbeddingRequest embeddingRequest) {
 
 		Assert.notNull(embeddingRequest, "The request body can not be null.");
 		Assert.notNull(embeddingRequest.input(), "The input can not be null.");
 		Assert.isTrue(!CollectionUtils.isEmpty(embeddingRequest.input().texts()), "The input texts can not be empty.");
 		Assert.isTrue(embeddingRequest.input().texts().size() <= 25, "The input texts limit 25.");
 
-		return this.restClient.post()
+		// Pure reactive WebClient call - no blocking!
+		return this.webClient.post()
 			.uri(this.embeddingsPath)
 			.headers(this::addDefaultHeadersIfMissing)
-			.body(embeddingRequest)
+			.bodyValue(embeddingRequest)
 			.retrieve()
-			.toEntity(EmbeddingList.class);
+			.bodyToMono(EmbeddingList.class);
 	}
 
 	/*******************************************
@@ -1554,24 +1561,24 @@ public class DashScopeApi {
 	}
 
 	/**
-	 * Creates a model response for the given chat conversation.
+	 * Creates a model response for the given chat conversation. Pure reactive
+	 * implementation using WebClient.
 	 * @param chatRequest The chat completion request.
-	 * @return Entity response with {@link ChatCompletion} as a body and HTTP status code
-	 * and headers.
+	 * @return Mono of ChatCompletion response
 	 */
-	public ResponseEntity<ChatCompletion> chatCompletionEntity(ChatCompletionRequest chatRequest) {
-		return chatCompletionEntity(chatRequest, new LinkedMultiValueMap<>());
+	public Mono<ChatCompletion> chatCompletion(ChatCompletionRequest chatRequest) {
+		return chatCompletion(chatRequest, new LinkedMultiValueMap<>());
 	}
 
 	/**
-	 * Creates a model response for the given chat conversation.
+	 * Creates a model response for the given chat conversation. Pure reactive
+	 * implementation using WebClient.
 	 * @param chatRequest The chat completion request.
 	 * @param additionalHttpHeader Optional, additional HTTP headers to be added to the
 	 * request.
-	 * @return Entity response with {@link ChatCompletion} as a body and HTTP status code
-	 * and headers.
+	 * @return Mono of ChatCompletion response
 	 */
-	public ResponseEntity<ChatCompletion> chatCompletionEntity(ChatCompletionRequest chatRequest,
+	public Mono<ChatCompletion> chatCompletion(ChatCompletionRequest chatRequest,
 			MultiValueMap<String, String> additionalHttpHeader) {
 
 		Assert.notNull(chatRequest, "The request body can not be null.");
@@ -1583,17 +1590,11 @@ public class DashScopeApi {
 			chatCompletionUri = "/api/v1/services/aigc/multimodal-generation/generation";
 		}
 
-		// @formatter:off
-		return this.restClient.post()
-				.uri(chatCompletionUri)
-				.headers(headers -> {
-					headers.addAll(additionalHttpHeader);
-					addDefaultHeadersIfMissing(headers);
-				})
-				.body(chatRequest)
-				.retrieve()
-				.toEntity(ChatCompletion.class);
-		// @formatter:on
+		// Pure reactive WebClient call - no blocking!
+		return this.webClient.post().uri(chatCompletionUri).headers(headers -> {
+			headers.addAll(additionalHttpHeader);
+			addDefaultHeadersIfMissing(headers);
+		}).bodyValue(chatRequest).retrieve().bodyToMono(ChatCompletion.class);
 	}
 
 	private void addDefaultHeadersIfMissing(HttpHeaders headers) {

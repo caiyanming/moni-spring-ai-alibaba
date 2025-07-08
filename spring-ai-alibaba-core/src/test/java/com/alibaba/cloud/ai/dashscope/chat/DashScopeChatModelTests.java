@@ -42,10 +42,9 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
-import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -108,19 +107,18 @@ class DashScopeChatModelTests {
 		ChatCompletionOutput output = new ChatCompletionOutput(TEST_RESPONSE, List.of(choice));
 		TokenUsage usage = new TokenUsage(20, 10, 30);
 		ChatCompletion chatCompletion = new ChatCompletion(TEST_REQUEST_ID, output, usage);
-		ResponseEntity<ChatCompletion> responseEntity = ResponseEntity.ok(chatCompletion);
 
-		when(dashScopeApi.chatCompletionEntity(any(ChatCompletionRequest.class), any())).thenReturn(responseEntity);
+		when(dashScopeApi.chatCompletion(any(ChatCompletionRequest.class), any()))
+			.thenReturn(Mono.just(chatCompletion));
 
-		// Execute test
-		ChatResponse response = chatModel.call(prompt);
-
-		// Verify results
-		assertThat(response).isNotNull();
-		assertThat(response.getResult()).isNotNull();
-		assertThat(response.getResult().getOutput()).isInstanceOf(AssistantMessage.class);
-		assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
-		assertThat(response.getMetadata().getId()).isEqualTo(TEST_REQUEST_ID);
+		// Execute test and verify results
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult()).isNotNull();
+			assertThat(response.getResult().getOutput()).isInstanceOf(AssistantMessage.class);
+			assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
+			assertThat(response.getMetadata().getId()).isEqualTo(TEST_REQUEST_ID);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -181,14 +179,14 @@ class DashScopeChatModelTests {
 
 		ChatCompletion completion = new ChatCompletion("test-id", output, usage);
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenReturn(ResponseEntity.ok(completion));
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.just(completion));
 
 		// Test with system message
 		Prompt prompt = new Prompt(List.of(systemMessage, userMessage));
-		ChatResponse chatResponse = chatModel.call(prompt);
-
-		assertThat(chatResponse).isNotNull();
-		assertThat(chatResponse.getResults().get(0).getOutput().getText()).isEqualTo(response);
+		StepVerifier.create(chatModel.call(prompt)).assertNext(chatResponse -> {
+			assertThat(chatResponse).isNotNull();
+			assertThat(chatResponse.getResults().get(0).getOutput().getText()).isEqualTo(response);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -224,15 +222,15 @@ class DashScopeChatModelTests {
 		ChatCompletionOutput toolOutput = new ChatCompletionOutput(toolCallResponse, List.of(toolChoice));
 		ChatCompletion toolCompletion = new ChatCompletion("test-id", toolOutput, usage);
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenReturn(ResponseEntity.ok(toolCompletion));
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.just(toolCompletion));
 
 		// Test tool call
 		Message message = new UserMessage("What's the weather like?");
 		Prompt prompt = new Prompt(List.of(message), options);
-		ChatResponse response = toolChatModel.call(prompt);
-
-		assertThat(response).isNotNull();
-		assertThat(response.getResults().get(0).getOutput().getText()).contains("get_weather");
+		StepVerifier.create(toolChatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResults().get(0).getOutput().getText()).contains("get_weather");
+		}).verifyComplete();
 	}
 
 	@Test
@@ -281,24 +279,26 @@ class DashScopeChatModelTests {
 
 		Message message = new UserMessage("What's the weather like?");
 		Prompt prompt = new Prompt(List.of(message), options);
-		List<ChatResponse> responses = toolChatModel.stream(prompt).collectList().block();
-
-		assertThat(responses).isNotNull();
-		assertThat(responses).hasSize(3);
-		assertThat(responses.get(0).getResults().get(0).getOutput().getText()).isEqualTo(chunk1);
-		assertThat(responses.get(1).getResults().get(0).getOutput().getText()).isEqualTo(chunk2);
-		assertThat(responses.get(2).getResults().get(0).getOutput().getText()).isEqualTo(chunk3);
+		StepVerifier.create(toolChatModel.stream(prompt).collectList()).assertNext(responses -> {
+			assertThat(responses).isNotNull();
+			assertThat(responses).hasSize(3);
+			assertThat(responses.get(0).getResults().get(0).getOutput().getText()).isEqualTo(chunk1);
+			assertThat(responses.get(1).getResults().get(0).getOutput().getText()).isEqualTo(chunk2);
+			assertThat(responses.get(2).getResults().get(0).getOutput().getText()).isEqualTo(chunk3);
+		}).verifyComplete();
 	}
 
 	@Test
 	void testErrorHandling() {
 		// Test error handling
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenThrow(new RuntimeException("API Error"));
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.error(new RuntimeException("API Error")));
 
 		Message message = new UserMessage("Test message");
 		Prompt prompt = new Prompt(List.of(message));
 
-		assertThatThrownBy(() -> chatModel.call(prompt)).isInstanceOf(RuntimeException.class).hasMessage("API Error");
+		StepVerifier.create(chatModel.call(prompt))
+			.expectErrorMatches(throwable -> throwable instanceof RuntimeException && "API Error".equals(throwable.getMessage()))
+			.verify();
 	}
 
 	@Test
@@ -309,36 +309,40 @@ class DashScopeChatModelTests {
 		TokenUsage usage = new TokenUsage(0, 0, 0);
 		ChatCompletion completion = new ChatCompletion("test-id", output, usage);
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenReturn(ResponseEntity.ok(completion));
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.just(completion));
 
 		Message message = new UserMessage("Test message");
 		Prompt prompt = new Prompt(List.of(message));
-		ChatResponse response = chatModel.call(prompt);
-
-		assertThat(response).isNotNull();
-		assertThat(response.getResults()).isEmpty();
-		// Verify usage metadata
-		assertThat(response.getMetadata().getUsage()).isNotNull();
-		DefaultUsage aiUsage = (DefaultUsage) response.getMetadata().getUsage();
-		assertThat(aiUsage.getPromptTokens()).isZero();
-		assertThat(aiUsage.getCompletionTokens()).isZero();
-		assertThat(aiUsage.getTotalTokens()).isZero();
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResults()).isEmpty();
+			// Verify usage metadata
+			assertThat(response.getMetadata().getUsage()).isNotNull();
+			DefaultUsage aiUsage = (DefaultUsage) response.getMetadata().getUsage();
+			assertThat(aiUsage.getPromptTokens()).isZero();
+			assertThat(aiUsage.getCompletionTokens()).isZero();
+			assertThat(aiUsage.getTotalTokens()).isZero();
+		}).verifyComplete();
 	}
 
 	@Test
 	void testEmptyPrompt() {
 		// Test handling of empty prompt
 		Prompt emptyPrompt = new Prompt(Collections.emptyList());
-		assertThatThrownBy(() -> chatModel.call(emptyPrompt)).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("Prompt");
+		StepVerifier.create(chatModel.call(emptyPrompt))
+			.expectErrorMatches(throwable -> throwable instanceof IllegalArgumentException
+					&& throwable.getMessage().contains("Prompt"))
+			.verify();
 	}
 
 	@Test
 	void testNullPrompt() {
 		// Test handling of null prompt
 		Prompt prompt = null;
-		assertThatThrownBy(() -> chatModel.call(prompt)).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("Prompt");
+		StepVerifier.create(chatModel.call(prompt))
+			.expectErrorMatches(throwable -> throwable instanceof IllegalArgumentException
+					&& throwable.getMessage().contains("Prompt"))
+			.verify();
 	}
 
 	@Test
@@ -356,18 +360,17 @@ class DashScopeChatModelTests {
 		ChatCompletionOutput output = new ChatCompletionOutput(TEST_RESPONSE, List.of(choice));
 		TokenUsage usage = new TokenUsage(20, 10, 30);
 		ChatCompletion chatCompletion = new ChatCompletion(TEST_REQUEST_ID, output, usage);
-		ResponseEntity<ChatCompletion> responseEntity = ResponseEntity.ok(chatCompletion);
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenReturn(responseEntity);
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.just(chatCompletion));
 
-		ChatResponse response = chatModel.call(prompt);
-
-		assertThat(response.getMetadata()).isNotNull();
-		assertThat(response.getMetadata().getId()).isEqualTo(TEST_REQUEST_ID);
-		DefaultUsage aiUsage = (DefaultUsage) response.getMetadata().getUsage();
-		assertThat(aiUsage.getPromptTokens()).isEqualTo(10L);
-		assertThat(aiUsage.getCompletionTokens()).isEqualTo(20);
-		assertThat(aiUsage.getTotalTokens()).isEqualTo(30L);
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response.getMetadata()).isNotNull();
+			assertThat(response.getMetadata().getId()).isEqualTo(TEST_REQUEST_ID);
+			DefaultUsage aiUsage = (DefaultUsage) response.getMetadata().getUsage();
+			assertThat(aiUsage.getPromptTokens()).isEqualTo(10L);
+			assertThat(aiUsage.getCompletionTokens()).isEqualTo(20);
+			assertThat(aiUsage.getTotalTokens()).isEqualTo(30L);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -382,10 +385,13 @@ class DashScopeChatModelTests {
 		Message message = new UserMessage(TEST_PROMPT);
 		Prompt prompt = new Prompt(List.of(message));
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenThrow(new RuntimeException("Invalid model name"));
+		when(dashScopeApi.chatCompletion(any(), any()))
+			.thenReturn(Mono.error(new RuntimeException("Invalid model name")));
 
-		assertThatThrownBy(() -> invalidModel.call(prompt)).isInstanceOf(RuntimeException.class)
-			.hasMessage("Invalid model name");
+		StepVerifier.create(invalidModel.call(prompt))
+			.expectErrorMatches(throwable -> throwable instanceof RuntimeException
+					&& "Invalid model name".equals(throwable.getMessage()))
+			.verify();
 	}
 
 	@Test
@@ -404,13 +410,13 @@ class DashScopeChatModelTests {
 		TokenUsage usage = new TokenUsage(0, 0, 0);
 		ChatCompletion completion = new ChatCompletion("test-id", output, usage);
 
-		when(dashScopeApi.chatCompletionEntity(any(), any())).thenReturn(ResponseEntity.ok(completion));
+		when(dashScopeApi.chatCompletion(any(), any())).thenReturn(Mono.just(completion));
 
 		Prompt prompt = new Prompt(List.of(systemMessage, userMessage1, assistantMessage, userMessage2));
-		ChatResponse response = chatModel.call(prompt);
-
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isEqualTo("It's sunny today!");
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isEqualTo("It's sunny today!");
+		}).verifyComplete();
 	}
 
 	// @Test

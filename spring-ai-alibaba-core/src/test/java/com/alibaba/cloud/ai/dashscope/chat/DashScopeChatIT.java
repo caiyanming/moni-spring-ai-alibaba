@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -79,13 +80,13 @@ class DashScopeChatIT {
 		UserMessage message = new UserMessage(TEST_PROMPT);
 		Prompt prompt = new Prompt(message);
 
-		// Call the chat model
-		Generation response = chatModel.call(prompt).getResult();
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getOutput().getText()).isNotEmpty();
-		System.out.println("Chat Response: " + response.getOutput().getText());
+		// Call the chat model and verify response
+		StepVerifier.create(chatModel.call(prompt)).assertNext(chatResponse -> {
+			Generation response = chatResponse.getResult();
+			assertThat(response).isNotNull();
+			assertThat(response.getOutput().getText()).isNotEmpty();
+			System.out.println("Chat Response: " + response.getOutput().getText());
+		}).verifyComplete();
 	}
 
 	/**

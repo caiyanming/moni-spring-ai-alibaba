@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.test.StepVerifier;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -242,11 +243,10 @@ public class ArmsToolCallingObservationIT {
 
 		List<Message> messages = new ArrayList<>(List.of(userMessage));
 
-		ChatResponse response = this.chatModel.call(new Prompt(messages, promptOptions));
-
-		logger.info("Response: {}", response);
-
-		assertThat(response.getResult().getOutput().getText()).contains("30", "10", "15");
+		StepVerifier.create(this.chatModel.call(new Prompt(messages, promptOptions))).assertNext(response -> {
+			logger.info("Response: {}", response);
+			assertThat(response.getResult().getOutput().getText()).contains("30", "10", "15");
+		}).verifyComplete();
 
 		validate();
 	}

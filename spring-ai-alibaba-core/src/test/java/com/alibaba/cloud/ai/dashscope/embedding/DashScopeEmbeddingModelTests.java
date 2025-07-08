@@ -23,11 +23,11 @@ import com.alibaba.cloud.ai.dashscope.api.DashScopeApi.Embedding;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import reactor.test.StepVerifier;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingRequest;
-import org.springframework.ai.embedding.EmbeddingResponse;
-import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Mono;
 
 import java.util.Arrays;
 import java.util.List;
@@ -86,16 +86,14 @@ class DashScopeEmbeddingModelTests {
 		Embeddings embeddings = new Embeddings(List.of(embedding));
 		EmbeddingUsage usage = new EmbeddingUsage(10L);
 		EmbeddingList embeddingList = new EmbeddingList(TEST_REQUEST_ID, null, null, embeddings, usage);
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(embeddingList);
-
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(embeddingList));
 
 		// Test embedding a single text
-		EmbeddingResponse response = embeddingModel.embedForResponse(List.of(TEST_TEXT));
-
-		assertThat(response.getResults()).hasSize(1);
-		assertThat(response.getResults().get(0).getOutput()).containsExactly(embeddingVector);
-		assertThat(response.getResults().get(0).getIndex()).isEqualTo(0);
+		StepVerifier.create(embeddingModel.embedForResponse(List.of(TEST_TEXT))).assertNext(response -> {
+			assertThat(response.getResults()).hasSize(1);
+			assertThat(response.getResults().get(0).getOutput()).containsExactly(embeddingVector);
+			assertThat(response.getResults().get(0).getIndex()).isEqualTo(0);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -107,16 +105,14 @@ class DashScopeEmbeddingModelTests {
 		Embeddings embeddings = new Embeddings(embeddingList);
 		EmbeddingUsage usage = new EmbeddingUsage(20L);
 		EmbeddingList response = new EmbeddingList(TEST_REQUEST_ID, null, null, embeddings, usage);
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(response);
-
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(response));
 
 		List<String> texts = Arrays.asList("First text", "Second text");
-		EmbeddingResponse embeddingResponse = embeddingModel.embedForResponse(texts);
-
-		assertThat(embeddingResponse.getResults()).hasSize(2);
-		assertThat(embeddingResponse.getResults().get(0).getOutput()).containsExactly(vector1);
-		assertThat(embeddingResponse.getResults().get(1).getOutput()).containsExactly(vector2);
+		StepVerifier.create(embeddingModel.embedForResponse(texts)).assertNext(embeddingResponse -> {
+			assertThat(embeddingResponse.getResults()).hasSize(2);
+			assertThat(embeddingResponse.getResults().get(0).getOutput()).containsExactly(vector1);
+			assertThat(embeddingResponse.getResults().get(1).getOutput()).containsExactly(vector2);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -127,14 +123,12 @@ class DashScopeEmbeddingModelTests {
 		Embeddings embeddings = new Embeddings(List.of(embedding));
 		EmbeddingUsage usage = new EmbeddingUsage(10L);
 		EmbeddingList embeddingList = new EmbeddingList(TEST_REQUEST_ID, null, null, embeddings, usage);
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(embeddingList);
-
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(embeddingList));
 
 		Document document = new Document(TEST_TEXT, Map.of("key", "value"));
-		float[] result = embeddingModel.embed(document);
-
-		assertThat(result).containsExactly(embeddingVector);
+		StepVerifier.create(embeddingModel.embed(document)).assertNext(result -> {
+			assertThat(result).containsExactly(embeddingVector);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -142,13 +136,12 @@ class DashScopeEmbeddingModelTests {
 		// Test error handling with error response
 		EmbeddingList errorResponse = new EmbeddingList(TEST_REQUEST_ID, "ERROR_CODE", "Error message", null,
 				new EmbeddingUsage(0L));
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(errorResponse);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(errorResponse));
 
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
-
-		assertThatThrownBy(() -> embeddingModel.embedForResponse(List.of(TEST_TEXT)))
-			.isInstanceOf(RuntimeException.class)
-			.hasMessageContaining("Embedding failed");
+		StepVerifier.create(embeddingModel.embedForResponse(List.of(TEST_TEXT)))
+			.expectErrorMatches(throwable -> throwable instanceof RuntimeException
+					&& throwable.getMessage().contains("Embedding failed"))
+			.verify();
 	}
 
 	@Test
@@ -170,9 +163,7 @@ class DashScopeEmbeddingModelTests {
 		Embeddings embeddings = new Embeddings(List.of(embedding));
 		EmbeddingUsage usage = new EmbeddingUsage(10L);
 		EmbeddingList embeddingList = new EmbeddingList(TEST_REQUEST_ID, null, null, embeddings, usage);
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(embeddingList);
-
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(embeddingList));
 
 		DashScopeEmbeddingOptions customOptions = DashScopeEmbeddingOptions.builder()
 			.withModel("custom-model")
@@ -181,10 +172,10 @@ class DashScopeEmbeddingModelTests {
 			.build();
 
 		EmbeddingRequest request = new EmbeddingRequest(List.of(TEST_TEXT), customOptions);
-		EmbeddingResponse response = embeddingModel.call(request);
-
-		assertThat(response.getResults()).hasSize(1);
-		assertThat(response.getResults().get(0).getOutput()).containsExactly(embeddingVector);
+		StepVerifier.create(embeddingModel.call(request)).assertNext(response -> {
+			assertThat(response.getResults()).hasSize(1);
+			assertThat(response.getResults().get(0).getOutput()).containsExactly(embeddingVector);
+		}).verifyComplete();
 	}
 
 	@Test
@@ -192,14 +183,12 @@ class DashScopeEmbeddingModelTests {
 		// Test handling of empty response with non-null usage
 		EmbeddingUsage usage = new EmbeddingUsage(0L);
 		EmbeddingList emptyResponse = new EmbeddingList(TEST_REQUEST_ID, null, null, new Embeddings(List.of()), usage);
-		ResponseEntity<EmbeddingList> responseEntity = ResponseEntity.ok(emptyResponse);
+		when(dashScopeApi.embeddings(any())).thenReturn(Mono.just(emptyResponse));
 
-		when(dashScopeApi.embeddings(any())).thenReturn(responseEntity);
-
-		EmbeddingResponse response = embeddingModel.embedForResponse(List.of(TEST_TEXT));
-
-		assertThat(response.getResults()).isEmpty();
-		assertThat(response.getMetadata().getUsage().getTotalTokens()).isZero();
+		StepVerifier.create(embeddingModel.embedForResponse(List.of(TEST_TEXT))).assertNext(response -> {
+			assertThat(response.getResults()).isEmpty();
+			assertThat(response.getMetadata().getUsage().getTotalTokens()).isZero();
+		}).verifyComplete();
 	}
 
 }

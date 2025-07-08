@@ -46,7 +46,7 @@ import org.springframework.ai.content.Media;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
-import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Mono;
 import org.springframework.util.MimeTypeUtils;
 
 import static com.alibaba.cloud.ai.dashscope.common.DashScopeApiConstants.MESSAGE_FORMAT;
@@ -113,9 +113,9 @@ public class DashScopeMultiModalChatTests {
 		ChatCompletionOutput output = new ChatCompletionOutput(TEST_RESPONSE, List.of(choice));
 		TokenUsage usage = new TokenUsage(20, 10, 30);
 		ChatCompletion chatCompletion = new ChatCompletion(TEST_REQUEST_ID, output, usage);
-		ResponseEntity<ChatCompletion> responseEntity = ResponseEntity.ok(chatCompletion);
 
-		when(dashScopeApi.chatCompletionEntity(any(ChatCompletionRequest.class), any())).thenReturn(responseEntity);
+		when(dashScopeApi.chatCompletion(any(ChatCompletionRequest.class), any()))
+			.thenReturn(Mono.just(chatCompletion));
 
 		// Create media list with URL
 		List<Media> mediaList = List.of(new Media(MimeTypeUtils.IMAGE_PNG,
@@ -129,12 +129,11 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = chatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
+		// Call the chat model and verify response
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
+		}).verifyComplete();
 	}
 
 	/**
@@ -149,9 +148,9 @@ public class DashScopeMultiModalChatTests {
 		ChatCompletionOutput output = new ChatCompletionOutput(TEST_RESPONSE, List.of(choice));
 		TokenUsage usage = new TokenUsage(20, 10, 30);
 		ChatCompletion chatCompletion = new ChatCompletion(TEST_REQUEST_ID, output, usage);
-		ResponseEntity<ChatCompletion> responseEntity = ResponseEntity.ok(chatCompletion);
 
-		when(dashScopeApi.chatCompletionEntity(any(ChatCompletionRequest.class), any())).thenReturn(responseEntity);
+		when(dashScopeApi.chatCompletion(any(ChatCompletionRequest.class), any()))
+			.thenReturn(Mono.just(chatCompletion));
 
 		// Create user message with resource media
 		UserMessage message = UserMessage.builder()
@@ -164,12 +163,11 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = chatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
+		// Call the chat model and verify response
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_RESPONSE);
+		}).verifyComplete();
 	}
 
 	/**
@@ -184,9 +182,9 @@ public class DashScopeMultiModalChatTests {
 		ChatCompletionOutput output = new ChatCompletionOutput(TEST_VIDEO_RESPONSE, List.of(choice));
 		TokenUsage usage = new TokenUsage(20, 10, 30);
 		ChatCompletion chatCompletion = new ChatCompletion(TEST_REQUEST_ID, output, usage);
-		ResponseEntity<ChatCompletion> responseEntity = ResponseEntity.ok(chatCompletion);
 
-		when(dashScopeApi.chatCompletionEntity(any(ChatCompletionRequest.class), any())).thenReturn(responseEntity);
+		when(dashScopeApi.chatCompletion(any(ChatCompletionRequest.class), any()))
+			.thenReturn(Mono.just(chatCompletion));
 
 		// Create media list with multiple frames (simulating video frames)
 		List<Media> mediaList = new ArrayList<>();
@@ -202,12 +200,11 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = chatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_VIDEO_RESPONSE);
+		// Call the chat model and verify response
+		StepVerifier.create(chatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isEqualTo(TEST_VIDEO_RESPONSE);
+		}).verifyComplete();
 	}
 
 	/**
@@ -285,13 +282,12 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = realChatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isNotEmpty();
-		System.out.println("Image URL Response: " + response.getResult().getOutput().getText());
+		// Call the chat model and verify response
+		StepVerifier.create(realChatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isNotEmpty();
+			System.out.println("Image URL Response: " + response.getResult().getOutput().getText());
+		}).verifyComplete();
 	}
 
 	/**
@@ -321,13 +317,12 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = realChatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isNotEmpty();
-		System.out.println("Binary Image Response: " + response.getResult().getOutput().getText());
+		// Call the chat model and verify response
+		StepVerifier.create(realChatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isNotEmpty();
+			System.out.println("Binary Image Response: " + response.getResult().getOutput().getText());
+		}).verifyComplete();
 	}
 
 	/**
@@ -360,13 +355,12 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = realChatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isNotEmpty();
-		System.out.println("Video Frames Response: " + response.getResult().getOutput().getText());
+		// Call the chat model and verify response
+		StepVerifier.create(realChatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isNotEmpty();
+			System.out.println("Video Frames Response: " + response.getResult().getOutput().getText());
+		}).verifyComplete();
 	}
 
 	/**
@@ -442,13 +436,12 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the chat model
-		ChatResponse response = realChatModel.call(prompt);
-
-		// Verify response
-		assertThat(response).isNotNull();
-		assertThat(response.getResult().getOutput().getText()).isNotEmpty();
-		System.out.println("Image Analysis Response: " + response.getResult().getOutput().getText());
+		// Call the chat model and verify response
+		StepVerifier.create(realChatModel.call(prompt)).assertNext(response -> {
+			assertThat(response).isNotNull();
+			assertThat(response.getResult().getOutput().getText()).isNotEmpty();
+			System.out.println("Image Analysis Response: " + response.getResult().getOutput().getText());
+		}).verifyComplete();
 	}
 
 }

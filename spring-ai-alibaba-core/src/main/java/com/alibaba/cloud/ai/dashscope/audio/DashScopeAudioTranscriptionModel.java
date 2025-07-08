@@ -35,6 +35,7 @@ import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.retry.support.RetryTemplate;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
@@ -96,7 +97,12 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 	}
 
 	@Override
-	public AudioTranscriptionResponse call(AudioTranscriptionPrompt prompt) {
+	public Mono<AudioTranscriptionResponse> call(AudioTranscriptionPrompt prompt) {
+		return Mono.fromCallable(() -> callSync(prompt)).subscribeOn(Schedulers.boundedElastic());
+	}
+
+	// Synchronous implementation for backward compatibility
+	public AudioTranscriptionResponse callSync(AudioTranscriptionPrompt prompt) {
 		DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
 
 		ResponseEntity<DashScopeAudioTranscriptionApi.Response> submitResponse = this.api.call(request);

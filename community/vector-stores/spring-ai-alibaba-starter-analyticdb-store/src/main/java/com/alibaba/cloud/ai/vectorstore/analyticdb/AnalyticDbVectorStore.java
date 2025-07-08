@@ -119,7 +119,7 @@ public class AnalyticDbVectorStore extends AbstractObservationVectorStore implem
 	private void initialize() throws Exception {
 		initializeVectorDataBase();
 		createNameSpaceIfNotExists();
-		createCollectionIfNotExists((long) this.embeddingModel.dimensions());
+		createCollectionIfNotExists((long) this.embeddingModel.dimensions().block());
 	}
 
 	private void initializeVectorDataBase() throws Exception {
@@ -207,7 +207,7 @@ public class AnalyticDbVectorStore extends AbstractObservationVectorStore implem
 			return; // nothing to do;
 		}
 		List<float[]> embeddings = this.embeddingModel.embed(documents, EmbeddingOptionsBuilder.builder().build(),
-				this.batchingStrategy);
+				this.batchingStrategy).block();
 
 		List<UpsertCollectionDataRequest.UpsertCollectionDataRequestRows> rows = new ArrayList<>(10);
 		for (int i = 0; i < documents.size(); i++) {
@@ -360,7 +360,7 @@ public class AnalyticDbVectorStore extends AbstractObservationVectorStore implem
 
 		return VectorStoreObservationContext.builder(DATA_BASE_SYSTEM, operationName)
 			.collectionName(this.collectionName)
-			.dimensions(this.embeddingModel.dimensions())
+			.dimensions(this.embeddingModel.dimensions().block())
 			.namespace(this.config.getNamespace())
 			.similarityMetric(this.config.getMetrics());
 	}

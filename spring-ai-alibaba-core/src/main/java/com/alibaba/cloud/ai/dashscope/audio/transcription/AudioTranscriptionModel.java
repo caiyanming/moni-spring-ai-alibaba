@@ -20,6 +20,7 @@ import org.springframework.ai.audio.transcription.AudioTranscriptionResponse;
 
 import org.springframework.ai.model.Model;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * @author kevinlin09
@@ -27,7 +28,7 @@ import reactor.core.publisher.Flux;
 public interface AudioTranscriptionModel extends Model<AudioTranscriptionPrompt, AudioTranscriptionResponse> {
 
 	@Override
-	AudioTranscriptionResponse call(AudioTranscriptionPrompt prompt);
+	Mono<AudioTranscriptionResponse> call(AudioTranscriptionPrompt prompt);
 
 	AudioTranscriptionResponse asyncCall(AudioTranscriptionPrompt prompt);
 

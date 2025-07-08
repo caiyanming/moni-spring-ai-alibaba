@@ -118,7 +118,7 @@ public class OceanBaseVectorStore extends AbstractObservationVectorStore impleme
 			return;
 		}
 		List<float[]> embeddings = this.embeddingModel.embed(documents, EmbeddingOptionsBuilder.builder().build(),
-				this.batchingStrategy);
+				this.batchingStrategy).block();
 		String sql = String.format(INSERT_DOC_SQL_TEMPLATE, tableName);
 		try (Connection connection = dataSource.getConnection();
 				PreparedStatement pstmt = connection.prepareStatement(sql)) {
@@ -219,7 +219,7 @@ public class OceanBaseVectorStore extends AbstractObservationVectorStore impleme
 	}
 
 	private String convertQueryToVectorBytes(String query) {
-		return Arrays.toString(this.embeddingModel.embed(query));
+		return Arrays.toString(this.embeddingModel.embed(query).block());
 	}
 
 	private void executeUpdate(String sql) {
@@ -252,7 +252,7 @@ public class OceanBaseVectorStore extends AbstractObservationVectorStore impleme
 	public VectorStoreObservationContext.Builder createObservationContextBuilder(String operationName) {
 		return VectorStoreObservationContext.builder(DATA_BASE_SYSTEM, operationName)
 			.collectionName(this.tableName)
-			.dimensions(this.embeddingModel.dimensions());
+			.dimensions(this.embeddingModel.dimensions().block());
 	}
 
 	public static class Builder extends AbstractVectorStoreBuilder<Builder> {

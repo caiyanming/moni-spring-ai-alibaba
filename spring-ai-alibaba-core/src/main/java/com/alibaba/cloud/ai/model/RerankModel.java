@@ -17,6 +17,7 @@
 package com.alibaba.cloud.ai.model;
 
 import org.springframework.ai.model.Model;
+import reactor.core.publisher.Mono;
 
 /**
  * Title rerank model interface.<br>
@@ -27,9 +28,10 @@ import org.springframework.ai.model.Model;
  * @since 1.0.0-M2
  */
 
+@FunctionalInterface
 public interface RerankModel extends Model<RerankRequest, RerankResponse> {
 
 	@Override
-	RerankResponse call(RerankRequest request);
+	Mono<RerankResponse> call(RerankRequest request);
 
 }

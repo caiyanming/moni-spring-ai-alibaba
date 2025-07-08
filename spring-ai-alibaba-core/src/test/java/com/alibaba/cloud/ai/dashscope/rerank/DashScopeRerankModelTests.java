@@ -112,7 +112,7 @@ class DashScopeRerankModelTests {
 		List<Document> documents = Collections.singletonList(new Document(TEST_DOC_TEXT));
 		RerankRequest request = new RerankRequest(null, documents);
 
-		assertThatThrownBy(() -> rerankModel.call(request)).isInstanceOf(IllegalArgumentException.class)
+		assertThatThrownBy(() -> rerankModel.callSync(request)).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("query must not be null");
 	}
 
@@ -124,7 +124,7 @@ class DashScopeRerankModelTests {
 	void testRerankWithNullDocuments() {
 		RerankRequest request = new RerankRequest(TEST_QUERY, null);
 
-		assertThatThrownBy(() -> rerankModel.call(request)).isInstanceOf(IllegalArgumentException.class)
+		assertThatThrownBy(() -> rerankModel.callSync(request)).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("documents must not be null");
 	}
 
@@ -150,7 +150,7 @@ class DashScopeRerankModelTests {
 
 		// Execute rerank
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
-		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.call(request);
+		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.callSync(request);
 
 		// Verify results
 		List<DocumentWithScore> results = response.getResults();
@@ -176,7 +176,7 @@ class DashScopeRerankModelTests {
 
 		// Execute rerank
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents);
-		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.call(request);
+		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.callSync(request);
 
 		// Verify empty results
 		assertThat(response.getResults()).isEmpty();
@@ -208,7 +208,7 @@ class DashScopeRerankModelTests {
 
 		// Execute rerank with custom options
 		RerankRequest request = new RerankRequest(TEST_QUERY, documents, customOptions);
-		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.call(request);
+		com.alibaba.cloud.ai.model.RerankResponse response = rerankModel.callSync(request);
 
 		// Verify results
 		assertThat(response.getResults()).hasSize(1);

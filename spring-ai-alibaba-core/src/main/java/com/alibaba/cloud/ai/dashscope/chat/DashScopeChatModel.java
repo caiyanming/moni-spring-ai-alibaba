@@ -62,7 +62,6 @@ import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.retry.RetryUtils;
 import org.springframework.ai.support.UsageCalculator;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.http.ResponseEntity;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
@@ -161,11 +160,11 @@ public class DashScopeChatModel implements ChatModel {
 	}
 
 	@Override
-	public ChatResponse call(Prompt prompt) {
+	public Mono<ChatResponse> call(Prompt prompt) {
 		Assert.notNull(prompt, "Prompt must not be null");
 		Assert.isTrue(!CollectionUtils.isEmpty(prompt.getInstructions()), "Prompt messages must not be empty");
 		Prompt requestPrompt = buildRequestPrompt(prompt);
-		return internalCall(requestPrompt, null);
+		return internalCallReactive(requestPrompt, null);
 	}
 
 	@Override
@@ -173,7 +172,7 @@ public class DashScopeChatModel implements ChatModel {
 		return DashScopeChatOptions.fromOptions(this.defaultOptions);
 	}
 
-	public ChatResponse internalCall(Prompt prompt, ChatResponse previousChatResponse) {
+	public Mono<ChatResponse> internalCallReactive(Prompt prompt, ChatResponse previousChatResponse) {
 		ChatCompletionRequest request = createRequest(prompt, false);
 
 		ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
@@ -181,40 +180,45 @@ public class DashScopeChatModel implements ChatModel {
 			.provider(DashScopeApiConstants.PROVIDER_NAME)
 			.build();
 
-		ChatResponse response = ChatModelObservationDocumentation.CHAT_MODEL_OPERATION
+		// Pure reactive implementation - no more boundedElastic!
+		return ChatModelObservationDocumentation.CHAT_MODEL_OPERATION
 			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
 					this.observationRegistry)
 			.observe(() -> {
-
-				ResponseEntity<ChatCompletion> completionEntity = this.retryTemplate
-					.execute(ctx -> dashscopeApi.chatCompletionEntity(request, getAdditionalHttpHeaders(prompt)));
-
-				var completionResponse = completionEntity.getBody();
-
-				ChatResponse chatResponse = toChatResponse(completionResponse, previousChatResponse, request, null);
-
-				observationContext.setResponse(chatResponse);
-
-				return chatResponse;
+				// Use pure reactive WebClient call
+				return this.dashscopeApi.chatCompletion(request, getAdditionalHttpHeaders(prompt))
+					.map(completionResponse -> {
+						ChatResponse chatResponse = toChatResponse(completionResponse, previousChatResponse, request,
+								null);
+						observationContext.setResponse(chatResponse);
+						return chatResponse;
+					});
+			})
+			.flatMap(response -> {
+				if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
+					return this.toolCallingManager.executeToolCalls(prompt, response).flatMap(toolExecutionResult -> {
+						if (toolExecutionResult.returnDirect()) {
+							// Return tool execution result directly to the client.
+							return Mono.just(ChatResponse.builder()
+								.from(response)
+								.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
+								.build());
+						}
+						else {
+							// Send the tool execution result back to the model.
+							return this.internalCallReactive(
+									new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
+									response);
+						}
+					});
+				}
+				return Mono.just(response);
 			});
+	}
 
-		if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-			var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response).block();
-			if (toolExecutionResult.returnDirect()) {
-				// Return tool execution result directly to the client.
-				return ChatResponse.builder()
-					.from(response)
-					.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
-					.build();
-			}
-			else {
-				// Send the tool execution result back to the model.
-				return this.internalCall(new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
-						response);
-			}
-		}
-
-		return response;
+	// Keep the old synchronous method for backward compatibility
+	public ChatResponse internalCall(Prompt prompt, ChatResponse previousChatResponse) {
+		return internalCallReactive(prompt, previousChatResponse).block();
 	}
 
 	@Override
@@ -259,9 +263,8 @@ public class DashScopeChatModel implements ChatModel {
 			// @formatter:off
 			Flux<ChatResponse> flux = chatResponse.flatMap(response -> {
 					if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-						return Flux.defer(
-								() -> {
-									var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response).block();
+						return this.toolCallingManager.executeToolCalls(prompt, response)
+								.flatMapMany(toolExecutionResult -> {
 									if (toolExecutionResult.returnDirect()) {
 										// Return tool execution result directly to the client.
 										return Flux.just(ChatResponse.builder().from(response)
@@ -272,8 +275,8 @@ public class DashScopeChatModel implements ChatModel {
 										return this.internalStream(new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
 												response);
 									}
-								}
-						).subscribeOn(Schedulers.boundedElastic());
+								})
+								.subscribeOn(Schedulers.boundedElastic());
 
 					}
 					else {

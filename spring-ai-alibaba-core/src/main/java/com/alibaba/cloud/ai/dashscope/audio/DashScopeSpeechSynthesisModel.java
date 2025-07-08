@@ -28,6 +28,7 @@ import com.alibaba.cloud.ai.dashscope.audio.synthesis.SpeechSynthesisResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.retry.RetryUtils;
@@ -80,7 +81,7 @@ public class DashScopeSpeechSynthesisModel implements SpeechSynthesisModel {
 	}
 
 	@Override
-	public SpeechSynthesisResponse call(SpeechSynthesisPrompt prompt) {
+	public Mono<SpeechSynthesisResponse> call(SpeechSynthesisPrompt prompt) {
 		Flux<SpeechSynthesisResponse> flux = this.stream(prompt);
 		return flux.reduce((resp1, resp2) -> {
 			ByteBuffer combinedBuffer = ByteBuffer.allocate(resp1.getResult().getOutput().getAudio().remaining()
@@ -90,7 +91,7 @@ public class DashScopeSpeechSynthesisModel implements SpeechSynthesisModel {
 			combinedBuffer.flip();
 
 			return new SpeechSynthesisResponse(new SpeechSynthesisResult(new SpeechSynthesisOutput(combinedBuffer)));
-		}).block();
+		});
 	}
 
 	@Override
