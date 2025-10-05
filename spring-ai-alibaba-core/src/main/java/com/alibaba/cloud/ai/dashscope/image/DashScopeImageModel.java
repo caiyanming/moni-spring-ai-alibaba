@@ -15,6 +15,7 @@
  */
 package com.alibaba.cloud.ai.dashscope.image;
 
+import com.alibaba.cloud.ai.dashscope.common.DashScopeApiConstants;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeImageApi;
 import com.alibaba.cloud.ai.dashscope.image.observation.DashScopeImageModelObservationConvention;
 import com.alibaba.cloud.ai.dashscope.image.observation.DashScopeImagePromptContentObservationHandler;
@@ -33,6 +34,7 @@ import org.springframework.ai.image.ImageResponseMetadata;
 import org.springframework.ai.image.observation.DefaultImageModelObservationConvention;
 import org.springframework.ai.image.observation.ImageModelObservationContext;
 import org.springframework.ai.image.observation.ImageModelObservationConvention;
+import org.springframework.ai.image.observation.ImageModelObservationDocumentation;
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
@@ -53,6 +55,8 @@ import java.time.Duration;
 public class DashScopeImageModel implements ImageModel {
 
 	private static final Logger logger = LoggerFactory.getLogger(DashScopeImageModel.class);
+
+	private static final ImageModelObservationConvention DEFAULT_OBSERVATION_CONVENTION = new DefaultImageModelObservationConvention();
 
 	/**
 	 * The default model used for the image completion requests.
@@ -128,6 +132,15 @@ public class DashScopeImageModel implements ImageModel {
 		return callReactive(request).block();
 	}
 
+	private Mono<ImageResponse> generateImageResponse(ImagePrompt request,
+			ImageModelObservationContext observationContext) {
+		return submitImageGenTask(request)
+			.flatMap(taskId -> pollImageGenTask(taskId).map(this::toImageResponse)
+				.onErrorReturn(new ImageResponse(List.of(), toMetadataTimeout(taskId))))
+			.switchIfEmpty(Mono.just(new ImageResponse(List.of(), toMetadataEmpty())))
+			.doOnNext(observationContext::setResponse);
+	}
+
 	/**
 	 * Reactive version of image generation - preferred method for non-blocking operations
 	 */
@@ -135,10 +148,15 @@ public class DashScopeImageModel implements ImageModel {
 		Assert.notNull(request, "Prompt must not be null");
 		Assert.isTrue(!CollectionUtils.isEmpty(request.getInstructions()), "Prompt messages must not be empty");
 
-		return submitImageGenTask(request)
-			.flatMap(taskId -> pollImageGenTask(taskId).map(this::toImageResponse)
-				.onErrorReturn(new ImageResponse(List.of(), toMetadataTimeout(taskId))))
-			.switchIfEmpty(Mono.just(new ImageResponse(List.of(), toMetadataEmpty())));
+		var observationContext = ImageModelObservationContext.builder()
+			.imagePrompt(request)
+			.provider(DashScopeApiConstants.PROVIDER_NAME)
+			.build();
+
+		return ImageModelObservationDocumentation.IMAGE_MODEL_OPERATION
+			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
+					this.observationRegistry)
+			.observe(() -> generateImageResponse(request, observationContext));
 	}
 
 	public Mono<String> submitImageGenTask(ImagePrompt request) {

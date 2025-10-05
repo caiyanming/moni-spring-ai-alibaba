@@ -19,7 +19,12 @@ import com.alibaba.cloud.ai.dashscope.common.DashScopeApiConstants;
 import com.alibaba.cloud.ai.dashscope.common.DashScopeException;
 import com.alibaba.cloud.ai.dashscope.protocol.DashScopeWebSocketClient;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeAudioTranscriptionApi;
+import com.alibaba.cloud.ai.dashscope.audio.observation.AudioTranscriptionObservationContext;
+import com.alibaba.cloud.ai.dashscope.audio.observation.AudioTranscriptionObservationConvention;
+import com.alibaba.cloud.ai.dashscope.audio.observation.AudioTranscriptionObservationDocumentation;
+import com.alibaba.cloud.ai.dashscope.audio.observation.DefaultAudioTranscriptionObservationConvention;
 import com.alibaba.cloud.ai.dashscope.audio.transcription.AudioTranscriptionModel;
+import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.audio.transcription.AudioTranscription;
@@ -44,6 +49,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.time.Duration;
+import java.util.function.Supplier;
 
 public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel {
 
@@ -54,6 +60,12 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 	private final DashScopeAudioTranscriptionOptions options;
 
 	private final RetryTemplate retryTemplate;
+
+	private static final AudioTranscriptionObservationConvention DEFAULT_OBSERVATION_CONVENTION = new DefaultAudioTranscriptionObservationConvention();
+
+	private final ObservationRegistry observationRegistry;
+
+	private AudioTranscriptionObservationConvention observationConvention = DEFAULT_OBSERVATION_CONVENTION;
 
 	public DashScopeAudioTranscriptionModel(DashScopeAudioTranscriptionApi api) {
 		this(api, DashScopeAudioTranscriptionOptions.builder().build());
@@ -66,49 +78,142 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 
 	public DashScopeAudioTranscriptionModel(DashScopeAudioTranscriptionApi api,
 			DashScopeAudioTranscriptionOptions options, RetryTemplate retryTemplate) {
+		this(api, options, retryTemplate, ObservationRegistry.NOOP);
+	}
+
+	public DashScopeAudioTranscriptionModel(DashScopeAudioTranscriptionApi api,
+			DashScopeAudioTranscriptionOptions options, RetryTemplate retryTemplate,
+			ObservationRegistry observationRegistry) {
 		this.api = api;
 		this.options = options;
 		this.retryTemplate = retryTemplate;
+		this.observationRegistry = observationRegistry != null ? observationRegistry : ObservationRegistry.NOOP;
 	}
 
 	@Override
 	public AudioTranscriptionResponse asyncCall(AudioTranscriptionPrompt prompt) {
-		DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
-
-		ResponseEntity<DashScopeAudioTranscriptionApi.Response> response = this.api.call(request);
-
-		if (response == null || response.getBody() == null) {
-			logger.warn("app call error: request: {}", request);
-			return null;
-		}
-
-		return toResponse(response.getBody());
+		return observeResponse(prompt, () -> {
+			DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
+			ResponseEntity<DashScopeAudioTranscriptionApi.Response> response = this.api.call(request);
+			if (response == null || response.getBody() == null) {
+				logger.warn("app call error: request: {}", request);
+				return null;
+			}
+			return toResponse(response.getBody());
+		});
 	}
 
 	@Override
 	public AudioTranscriptionResponse fetch(String taskId) {
 		AudioTranscriptionPrompt prompt = new AudioTranscriptionPrompt(null);
-
-		DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
-
-		ResponseEntity<DashScopeAudioTranscriptionApi.Response> response = this.api.callWithTaskId(request, taskId);
-
-		return toResponse(Objects.requireNonNull(response.getBody()));
+		return observeResponse(prompt, () -> {
+			DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
+			ResponseEntity<DashScopeAudioTranscriptionApi.Response> response = this.api.callWithTaskId(request, taskId);
+			return toResponse(Objects.requireNonNull(response.getBody()));
+		});
 	}
 
 	@Override
 	public Mono<AudioTranscriptionResponse> call(AudioTranscriptionPrompt prompt) {
-		return Mono.fromCallable(() -> callSync(prompt)).subscribeOn(Schedulers.boundedElastic());
+		return observeMono(prompt, () -> Mono.fromCallable(() -> callInternal(prompt)))
+			.subscribeOn(Schedulers.boundedElastic());
 	}
 
 	// Synchronous implementation for backward compatibility
 	public AudioTranscriptionResponse callSync(AudioTranscriptionPrompt prompt) {
+		return observeResponse(prompt, () -> callInternal(prompt));
+	}
+
+	@Override
+	public Flux<AudioTranscriptionResponse> stream(AudioTranscriptionPrompt prompt) {
+		return observeFlux(prompt, () -> {
+			DashScopeAudioTranscriptionApi.RealtimeRequest run_request = createRealtimeRequest(prompt,
+					DashScopeWebSocketClient.EventType.RUN_TASK);
+
+			logger.info("send run-task");
+			this.api.realtimeControl(run_request);
+
+			Resource resource = prompt.getInstructions();
+
+			Flux<ByteBuffer> audio = DataBufferUtils.read(resource, new DefaultDataBufferFactory(), 16384)
+				.map(dataBuffer -> {
+					byte[] bytes = new byte[dataBuffer.readableByteCount()];
+					dataBuffer.read(bytes);
+					ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+					DataBufferUtils.release(dataBuffer);
+					return byteBuffer;
+				})
+				.delayElements(Duration.ofMillis(100), Schedulers.boundedElastic())
+				.doOnComplete(() -> {
+					DashScopeAudioTranscriptionApi.RealtimeRequest finish_request = createRealtimeRequest(prompt,
+							DashScopeWebSocketClient.EventType.FINISH_TASK);
+
+					logger.info("send finish-task");
+					this.api.realtimeControl(finish_request);
+				});
+
+			return this.api.realtimeStream(audio).map(this::toResponse);
+		});
+	}
+
+	private AudioTranscriptionObservationContext createObservationContext(AudioTranscriptionPrompt prompt) {
+		DashScopeAudioTranscriptionOptions effectiveOptions = mergeOptions(prompt);
+		AudioTranscriptionPrompt observationPrompt = new AudioTranscriptionPrompt(prompt.getInstructions(),
+				effectiveOptions);
+		return AudioTranscriptionObservationContext.builder()
+			.prompt(observationPrompt)
+			.provider(DashScopeApiConstants.PROVIDER_NAME)
+			.build();
+	}
+
+	private void setResponseIfPresent(AudioTranscriptionObservationContext observationContext,
+			AudioTranscriptionResponse response) {
+		if (response != null) {
+			observationContext.setResponse(response);
+		}
+	}
+
+	private AudioTranscriptionResponse observeResponse(AudioTranscriptionPrompt prompt,
+			Supplier<AudioTranscriptionResponse> supplier) {
+		AudioTranscriptionObservationContext observationContext = createObservationContext(prompt);
+		return AudioTranscriptionObservationDocumentation.AUDIO_TRANSCRIPTION_OPERATION
+			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
+					this.observationRegistry)
+			.observe(() -> {
+				AudioTranscriptionResponse response = supplier.get();
+				setResponseIfPresent(observationContext, response);
+				return response;
+			});
+	}
+
+	private Mono<AudioTranscriptionResponse> observeMono(AudioTranscriptionPrompt prompt,
+			Supplier<Mono<AudioTranscriptionResponse>> supplier) {
+		AudioTranscriptionObservationContext observationContext = createObservationContext(prompt);
+		return AudioTranscriptionObservationDocumentation.AUDIO_TRANSCRIPTION_OPERATION
+			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
+					this.observationRegistry)
+			.observe(() -> {
+				Mono<AudioTranscriptionResponse> result = supplier.get();
+				return result.doOnNext(response -> setResponseIfPresent(observationContext, response));
+			});
+	}
+
+	private Flux<AudioTranscriptionResponse> observeFlux(AudioTranscriptionPrompt prompt,
+			Supplier<Flux<AudioTranscriptionResponse>> supplier) {
+		AudioTranscriptionObservationContext observationContext = createObservationContext(prompt);
+		return AudioTranscriptionObservationDocumentation.AUDIO_TRANSCRIPTION_OPERATION
+			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
+					this.observationRegistry)
+			.observe(() -> {
+				Flux<AudioTranscriptionResponse> result = supplier.get();
+				return result.doOnNext(response -> setResponseIfPresent(observationContext, response));
+			});
+	}
+
+	private AudioTranscriptionResponse callInternal(AudioTranscriptionPrompt prompt) {
 		DashScopeAudioTranscriptionApi.Request request = createRequest(prompt);
-
 		ResponseEntity<DashScopeAudioTranscriptionApi.Response> submitResponse = this.api.call(request);
-
 		String taskId = Objects.requireNonNull(submitResponse.getBody()).output().taskId();
-
 		int waitMilliseconds = 1000;
 		int maxWaitMilliseconds = 5 * 1000;
 		int incrementSteps = 3;
@@ -116,11 +221,9 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 		while (true) {
 			DashScopeAudioTranscriptionApi.Response fetchResponse = (this.api.callWithTaskId(request, taskId))
 				.getBody();
-
 			DashScopeAudioTranscriptionApi.TaskStatus taskStatus = Objects.requireNonNull(fetchResponse)
 				.output()
 				.taskStatus();
-
 			if (taskStatus == DashScopeAudioTranscriptionApi.TaskStatus.FAILED
 					|| taskStatus == DashScopeAudioTranscriptionApi.TaskStatus.CANCELED
 					|| taskStatus == DashScopeAudioTranscriptionApi.TaskStatus.UNKNOWN) {
@@ -145,34 +248,9 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 		}
 	}
 
-	@Override
-	public Flux<AudioTranscriptionResponse> stream(AudioTranscriptionPrompt prompt) {
-		DashScopeAudioTranscriptionApi.RealtimeRequest run_request = createRealtimeRequest(prompt,
-				DashScopeWebSocketClient.EventType.RUN_TASK);
-
-		logger.info("send run-task");
-		this.api.realtimeControl(run_request);
-
-		Resource resource = prompt.getInstructions();
-
-		Flux<ByteBuffer> audio = DataBufferUtils.read(resource, new DefaultDataBufferFactory(), 16384)
-			.map(dataBuffer -> {
-				byte[] bytes = new byte[dataBuffer.readableByteCount()];
-				dataBuffer.read(bytes);
-				ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
-				DataBufferUtils.release(dataBuffer);
-				return byteBuffer;
-			})
-			.delayElements(Duration.ofMillis(100), Schedulers.boundedElastic())
-			.doOnComplete(() -> {
-				DashScopeAudioTranscriptionApi.RealtimeRequest finish_request = createRealtimeRequest(prompt,
-						DashScopeWebSocketClient.EventType.FINISH_TASK);
-
-				logger.info("send finish-task");
-				this.api.realtimeControl(finish_request);
-			});
-
-		return this.api.realtimeStream(audio).map(this::toResponse);
+	public void setObservationConvention(AudioTranscriptionObservationConvention observationConvention) {
+		this.observationConvention = Objects.requireNonNull(observationConvention,
+				"observationConvention cannot be null");
 	}
 
 	private DashScopeAudioTranscriptionApi.Request createRequest(AudioTranscriptionPrompt prompt) {
@@ -217,7 +295,7 @@ public class DashScopeAudioTranscriptionModel implements AudioTranscriptionModel
 			options = ModelOptionsUtils.merge(runtimeOptions, options, DashScopeAudioTranscriptionOptions.class);
 		}
 
-		options = ModelOptionsUtils.merge(options, this.options, DashScopeAudioTranscriptionOptions.class);
+		options = ModelOptionsUtils.merge(this.options, options, DashScopeAudioTranscriptionOptions.class);
 		return options;
 	}
 
