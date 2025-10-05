@@ -17,8 +17,8 @@ package com.alibaba.cloud.ai.autoconfigure.dashscope;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.alibaba.cloud.ai.dashscope.api.DashScopeSpeechSynthesisApi;
 import com.alibaba.cloud.ai.dashscope.audio.DashScopeSpeechSynthesisModel;
@@ -32,14 +32,13 @@ import org.apache.commons.logging.LogFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.ai.image.ImagePrompt;
-import org.springframework.ai.image.ImageResponse;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -74,9 +73,10 @@ public class DashScopeAutoConfigurationIT {
 
 		this.contextRunner.run(context -> {
 			DashScopeChatModel chatModel = context.getBean(DashScopeChatModel.class);
-			String response = chatModel.call("Hello").block();
-			assertThat(response).isNotEmpty();
-			logger.info("Response: " + response);
+			StepVerifier.create(chatModel.call("Hello")).assertNext(response -> {
+				assertThat(response).isNotEmpty();
+				logger.info("Response: " + response);
+			}).verifyComplete();
 		});
 	}
 
@@ -101,21 +101,19 @@ public class DashScopeAutoConfigurationIT {
 	void speech() {
 		this.contextRunner.run(context -> {
 			DashScopeSpeechSynthesisModel speechModel = context.getBean(DashScopeSpeechSynthesisModel.class);
-			byte[] response = speechModel
-				.call(new SpeechSynthesisPrompt("H",
-						DashScopeSpeechSynthesisOptions.builder()
-							.responseFormat(DashScopeSpeechSynthesisApi.ResponseFormat.MP3)
-							.build()))
-				.block()
-				.getResult()
-				.getOutput()
-				.getAudio()
-				.array();
-			assertThat(response).isNotNull();
-			// todo: check mp3 types
-			assertThat(response.length).isNotEqualTo(0);
+			StepVerifier.create(speechModel.call(new SpeechSynthesisPrompt("H",
+					DashScopeSpeechSynthesisOptions.builder()
+						.responseFormat(DashScopeSpeechSynthesisApi.ResponseFormat.MP3)
+						.build())))
+				.assertNext(synthesisResponse -> {
+					byte[] audio = synthesisResponse.getResult().getOutput().getAudio().array();
+					assertThat(audio).isNotNull();
+					// todo: check mp3 types
+					assertThat(audio.length).isNotEqualTo(0);
 
-			logger.debug("Response: " + Arrays.toString(response));
+					logger.debug("Response: " + Arrays.toString(audio));
+				})
+				.verifyComplete();
 		});
 	}
 
@@ -124,13 +122,14 @@ public class DashScopeAutoConfigurationIT {
 		this.contextRunner.run(context -> {
 			DashScopeChatModel chatModel = context.getBean(DashScopeChatModel.class);
 			Flux<ChatResponse> responseFlux = chatModel.stream(new Prompt(new UserMessage("Hello")));
-			String response = Objects.requireNonNull(responseFlux.collectList().block())
-				.stream()
-				.map(chatResponse -> chatResponse.getResults().get(0).getOutput().getText())
-				.collect(Collectors.joining());
 
-			assertThat(response).isNotEmpty();
-			logger.info("Response: " + response);
+			StepVerifier.create(responseFlux.collectList()).assertNext(responses -> {
+				String response = responses.stream()
+					.map(chatResponse -> chatResponse.getResults().get(0).getOutput().getText())
+					.collect(Collectors.joining());
+				assertThat(response).isNotEmpty();
+				logger.info("Response: " + response);
+			}).verifyComplete();
 		});
 	}
 
@@ -141,18 +140,22 @@ public class DashScopeAutoConfigurationIT {
 
 			Flux<ChatResponse> responseFlux = chatModel.stream(new Prompt(new UserMessage("Hello")));
 
-			Usage[] streamingTokenUsage = new Usage[1];
-			String response = Objects.requireNonNull(responseFlux.collectList().block()).stream().map(chatResponse -> {
-				streamingTokenUsage[0] = chatResponse.getMetadata().getUsage();
-				return (chatResponse.getResult() != null) ? chatResponse.getResult().getOutput().getText() : "";
-			}).collect(Collectors.joining());
+			AtomicReference<Usage> usageRef = new AtomicReference<>();
 
-			assertThat(streamingTokenUsage[0].getPromptTokens()).isGreaterThan(0);
-			assertThat(streamingTokenUsage[0].getCompletionTokens()).isGreaterThan(0);
-			assertThat(streamingTokenUsage[0].getTotalTokens()).isGreaterThan(0);
+			StepVerifier.create(responseFlux.collectList()).assertNext(responses -> {
+				String response = responses.stream().map(chatResponse -> {
+					usageRef.set(chatResponse.getMetadata().getUsage());
+					return (chatResponse.getResult() != null) ? chatResponse.getResult().getOutput().getText() : "";
+				}).collect(Collectors.joining());
+				assertThat(response).isNotEmpty();
+				logger.info("Response: " + response);
+			}).verifyComplete();
 
-			assertThat(response).isNotEmpty();
-			logger.info("Response: " + response);
+			Usage streamingTokenUsage = usageRef.get();
+			assertThat(streamingTokenUsage).isNotNull();
+			assertThat(streamingTokenUsage.getPromptTokens()).isGreaterThan(0);
+			assertThat(streamingTokenUsage.getCompletionTokens()).isGreaterThan(0);
+			assertThat(streamingTokenUsage.getTotalTokens()).isGreaterThan(0);
 		});
 	}
 
@@ -161,14 +164,16 @@ public class DashScopeAutoConfigurationIT {
 		this.textEmbeddingDefaultContextRunner.run(context -> {
 			DashScopeEmbeddingModel embeddingModel = context.getBean(DashScopeEmbeddingModel.class);
 
-			EmbeddingResponse embeddingResponse = embeddingModel
-				.embedForResponse(List.of("Hello World", "World is big and salvation is near"))
-				.block();
-			assertThat(embeddingResponse.getResults()).hasSize(2);
-			assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
-			assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
-			assertThat(embeddingResponse.getResults().get(1).getOutput()).isNotEmpty();
-			assertThat(embeddingResponse.getResults().get(1).getIndex()).isEqualTo(1);
+			StepVerifier
+				.create(embeddingModel.embedForResponse(List.of("Hello World", "World is big and salvation is near")))
+				.assertNext(embeddingResponse -> {
+					assertThat(embeddingResponse.getResults()).hasSize(2);
+					assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
+					assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
+					assertThat(embeddingResponse.getResults().get(1).getOutput()).isNotEmpty();
+					assertThat(embeddingResponse.getResults().get(1).getIndex()).isEqualTo(1);
+				})
+				.verifyComplete();
 
 			assertThat(embeddingModel.dimensions()).isEqualTo(1536);
 		});
@@ -179,17 +184,18 @@ public class DashScopeAutoConfigurationIT {
 		this.textEmbeddingV3ContextRunner.run(context -> {
 			DashScopeEmbeddingModel embeddingModel = context.getBean(DashScopeEmbeddingModel.class);
 
-			EmbeddingResponse embeddingResponse = embeddingModel
-				.embedForResponse(List.of("Hello World", "World is big and salvation is near"))
-				.block();
-			assertThat(embeddingResponse.getResults()).hasSize(2);
-			assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
-			assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
-			assertThat(embeddingResponse.getResults().get(1).getOutput()).isNotEmpty();
-			assertThat(embeddingResponse.getResults().get(1).getIndex()).isEqualTo(1);
+			StepVerifier
+				.create(embeddingModel.embedForResponse(List.of("Hello World", "World is big and salvation is near")))
+				.assertNext(embeddingResponse -> {
+					assertThat(embeddingResponse.getResults()).hasSize(2);
+					assertThat(embeddingResponse.getResults().get(0).getOutput()).isNotEmpty();
+					assertThat(embeddingResponse.getResults().get(0).getIndex()).isEqualTo(0);
+					assertThat(embeddingResponse.getResults().get(1).getOutput()).isNotEmpty();
+					assertThat(embeddingResponse.getResults().get(1).getIndex()).isEqualTo(1);
+				})
+				.verifyComplete();
 
 			assertThat(embeddingModel.dimensions()).isEqualTo(512);
-
 		});
 	}
 
@@ -197,11 +203,12 @@ public class DashScopeAutoConfigurationIT {
 	void generateImage() {
 		this.contextRunner.withPropertyValues("spring.ai.dashScope.image.options.size=1024x1024").run(context -> {
 			DashScopeImageModel imageModel = context.getBean(DashScopeImageModel.class);
-			ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree")).block();
-			System.out.println(imageResponse.getResult().getOutput().getUrl());
-			assertThat(imageResponse.getResults()).hasSize(1);
-			assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
-			logger.info("Generated image: " + imageResponse.getResult().getOutput().getUrl());
+			StepVerifier.create(imageModel.call(new ImagePrompt("tree"))).assertNext(imageResponse -> {
+				System.out.println(imageResponse.getResult().getOutput().getUrl());
+				assertThat(imageResponse.getResults()).hasSize(1);
+				assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
+				logger.info("Generated image: " + imageResponse.getResult().getOutput().getUrl());
+			}).verifyComplete();
 		});
 	}
 
@@ -213,10 +220,11 @@ public class DashScopeAutoConfigurationIT {
 					"spring.ai.dashScope.image.options.size=256x256")
 			.run(context -> {
 				DashScopeImageModel imageModel = context.getBean(DashScopeImageModel.class);
-				ImageResponse imageResponse = imageModel.call(new ImagePrompt("tree")).block();
-				assertThat(imageResponse.getResults()).hasSize(1);
-				assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
-				logger.info("Generated image: " + imageResponse.getResult().getOutput().getUrl());
+				StepVerifier.create(imageModel.call(new ImagePrompt("tree"))).assertNext(imageResponse -> {
+					assertThat(imageResponse.getResults()).hasSize(1);
+					assertThat(imageResponse.getResult().getOutput().getUrl()).isNotEmpty();
+					logger.info("Generated image: " + imageResponse.getResult().getOutput().getUrl());
+				}).verifyComplete();
 			});
 	}
 

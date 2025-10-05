@@ -140,6 +140,7 @@ class DashScopeImageModelObservationTests {
 			.build();
 
 		ImagePrompt prompt = new ImagePrompt("A test image", options);
+
 		ImageResponse responseObj = model.callSync(prompt);
 
 		assertThat(responseObj).isNotNull();

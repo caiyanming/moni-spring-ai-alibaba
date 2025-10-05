@@ -110,20 +110,18 @@ class DashScopeChatIT {
 		UserMessage message = new UserMessage(TEST_PROMPT);
 		Prompt prompt = new Prompt(message);
 
-		// Call the streaming API and collect responses
-		StringBuilder responseBuilder = new StringBuilder();
+		// Call the streaming API and collect responses using StepVerifier
 		Flux<Generation> responseFlux = chatModel.stream(prompt).map(ChatResponse::getResult);
 
-		responseFlux.doOnNext(generation -> {
+		StepVerifier.create(responseFlux.map(generation -> {
 			String content = generation.getOutput().getText();
 			System.out.println("Streaming chunk: " + content);
-			responseBuilder.append(content);
-		}).blockLast();
-
-		// Verify final response
-		String finalResponse = responseBuilder.toString();
-		assertThat(finalResponse).isNotEmpty();
-		System.out.println("Final streaming response: " + finalResponse);
+			return content;
+		}).collectList()).assertNext(chunks -> {
+			String finalResponse = String.join("", chunks);
+			assertThat(finalResponse).isNotEmpty();
+			System.out.println("Final streaming response: " + finalResponse);
+		}).verifyComplete();
 	}
 
 }

@@ -329,7 +329,7 @@ class DashScopeChatModelTests {
 	void testEmptyPrompt() {
 		// Test handling of empty prompt
 		Prompt emptyPrompt = new Prompt(Collections.emptyList());
-		StepVerifier.create(chatModel.call(emptyPrompt))
+		StepVerifier.create(Mono.defer(() -> chatModel.call(emptyPrompt)))
 			.expectErrorMatches(throwable -> throwable instanceof IllegalArgumentException
 					&& throwable.getMessage().contains("Prompt"))
 			.verify();
@@ -339,7 +339,7 @@ class DashScopeChatModelTests {
 	void testNullPrompt() {
 		// Test handling of null prompt
 		Prompt prompt = null;
-		StepVerifier.create(chatModel.call(prompt))
+		StepVerifier.create(Mono.defer(() -> chatModel.call(prompt)))
 			.expectErrorMatches(throwable -> throwable instanceof IllegalArgumentException
 					&& throwable.getMessage().contains("Prompt"))
 			.verify();

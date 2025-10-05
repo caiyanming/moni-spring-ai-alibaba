@@ -222,17 +222,16 @@ public class ArmsToolCallingObservationIT {
 
 		Flux<ChatResponse> response = this.chatModel.stream(new Prompt(messages, promptOptions));
 
-		String content = response.collectList()
-			.block()
-			.stream()
-			.map(ChatResponse::getResults)
-			.flatMap(List::stream)
-			.map(Generation::getOutput)
-			.map(AssistantMessage::getText)
-			.collect(Collectors.joining());
-		logger.info("Response: {}", content);
-
-		assertThat(content).contains("30", "10", "15");
+		StepVerifier.create(response.collectList()).assertNext(responses -> {
+			String content = responses.stream()
+				.map(ChatResponse::getResults)
+				.flatMap(List::stream)
+				.map(Generation::getOutput)
+				.map(AssistantMessage::getText)
+				.collect(Collectors.joining());
+			logger.info("Response: {}", content);
+			assertThat(content).contains("30", "10", "15");
+		}).verifyComplete();
 
 		validate();
 	}

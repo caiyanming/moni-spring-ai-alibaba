@@ -17,10 +17,8 @@ package com.alibaba.cloud.ai.dashscope.chat;
 
 import java.io.IOException;
 import java.net.URI;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi.ChatCompletion;
@@ -390,23 +388,18 @@ public class DashScopeMultiModalChatTests {
 		Prompt prompt = new Prompt(message,
 				DashScopeChatOptions.builder().withModel(TEST_MODEL).withMultiModel(true).build());
 
-		// Call the streaming API
+		// Call the streaming API and verify without blocking
 		Flux<ChatResponse> responseFlux = realChatModel.stream(prompt);
 
-		// Collect all responses
-		AtomicReference<StringBuilder> responseBuilder = new AtomicReference<>(new StringBuilder());
-
-		// Verify streaming response
-		responseFlux.doOnNext(response -> {
+		StepVerifier.create(responseFlux.map(response -> {
 			String content = response.getResult().getOutput().getText();
 			System.out.println("Streaming chunk: " + content);
-			responseBuilder.get().append(content);
-		}).blockLast(Duration.ofSeconds(30));
-
-		// Verify final response
-		String finalResponse = responseBuilder.get().toString();
-		assertThat(finalResponse).isNotEmpty();
-		System.out.println("Final streaming response: " + finalResponse);
+			return content;
+		}).collectList()).assertNext(chunks -> {
+			String finalResponse = String.join("", chunks);
+			assertThat(finalResponse).isNotEmpty();
+			System.out.println("Final streaming response: " + finalResponse);
+		}).verifyComplete();
 	}
 
 	/**
