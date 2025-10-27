@@ -35,6 +35,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.chat.model.UnixProcessContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
@@ -123,6 +124,12 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 
 	@Override
 	public Mono<ToolExecutionResult> executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+		return executeToolCalls(prompt, chatResponse, null);
+	}
+
+	@Override
+	public Mono<ToolExecutionResult> executeToolCalls(Prompt prompt, ChatResponse chatResponse,
+			UnixProcessContext processContext) {
 		Assert.notNull(prompt, "prompt cannot be null");
 		Assert.notNull(chatResponse, "chatResponse cannot be null");
 
@@ -132,28 +139,26 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 			.findFirst();
 
 		if (toolCallGeneration.isEmpty()) {
-			throw new IllegalStateException("No tool call requested by the chat model");
+			return Mono.error(new IllegalStateException("No tool call requested by the chat model"));
 		}
 
 		AssistantMessage assistantMessage = toolCallGeneration.get().getOutput();
+		ToolContext toolContext = buildToolContext(prompt, assistantMessage, processContext);
 
-		ToolContext toolContext = buildToolContext(prompt, assistantMessage);
-
-		return Mono.fromCallable(() -> {
-			InternalToolExecutionResult internalToolExecutionResult = executeToolCall(prompt, assistantMessage,
-					toolContext);
-
+		// Execute tool calls completely reactively
+		return executeToolCallsReactively(prompt, assistantMessage, toolContext, processContext).map(internalResult -> {
 			List<Message> conversationHistory = buildConversationHistoryAfterToolExecution(prompt.getInstructions(),
-					assistantMessage, internalToolExecutionResult.toolResponseMessage());
+					assistantMessage, internalResult.toolResponseMessage());
 
 			return ToolExecutionResult.builder()
 				.conversationHistory(conversationHistory)
-				.returnDirect(internalToolExecutionResult.returnDirect())
+				.returnDirect(internalResult.returnDirect())
 				.build();
 		});
 	}
 
-	private static ToolContext buildToolContext(Prompt prompt, AssistantMessage assistantMessage) {
+	private static ToolContext buildToolContext(Prompt prompt, AssistantMessage assistantMessage,
+			UnixProcessContext processContext) {
 		Map<String, Object> toolContextMap = Map.of();
 
 		if (prompt.getOptions() instanceof ToolCallingChatOptions toolCallingChatOptions
@@ -164,7 +169,19 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 					buildConversationHistoryBeforeToolExecution(prompt, assistantMessage));
 		}
 
-		return new ToolContext(toolContextMap);
+		ToolContext toolContext = new ToolContext(toolContextMap);
+
+		// Restore Unix process state from processContext if available
+		if (processContext != null) {
+			toolContext.setStdin(processContext.getStdin());
+			toolContext.setStdout(processContext.getStdout());
+			toolContext.setStderr(processContext.getStderr());
+			toolContext.setCwd(processContext.getCwd());
+			toolContext.setExitCode(processContext.getExitCode());
+			toolContextMap.putAll(processContext.getEnv());
+		}
+
+		return toolContext;
 	}
 
 	private static List<Message> buildConversationHistoryBeforeToolExecution(Prompt prompt,
@@ -176,8 +193,146 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 	}
 
 	/**
-	 * Execute the tool call and return the response message.
+	 * Execute the tool calls reactively with Unix pipeline semantics. Tools are executed
+	 * sequentially with automatic stdout → stdin connection. This enables Unix-style
+	 * pipeline composition (e.g., ls | grep | wc).
 	 */
+	private Mono<InternalToolExecutionResult> executeToolCallsReactively(Prompt prompt,
+			AssistantMessage assistantMessage, ToolContext toolContext, UnixProcessContext processContext) {
+		final List<ToolCallback> toolCallbacks;
+		if (prompt.getOptions() instanceof ToolCallingChatOptions toolCallingChatOptions) {
+			toolCallbacks = toolCallingChatOptions.getToolCallbacks();
+		}
+		else {
+			toolCallbacks = List.of();
+		}
+
+		final List<AssistantMessage.ToolCall> toolCalls = assistantMessage.getToolCalls();
+		if (toolCalls.isEmpty()) {
+			return Mono.just(new InternalToolExecutionResult(new ToolResponseMessage(List.of(), Map.of()), false));
+		}
+
+		// Collect tool responses for the final result
+		final List<ToolResponseMessage.ToolResponse> responses = new java.util.ArrayList<>();
+
+		// Execute tool calls sequentially (concatMap) to support pipeline
+		return reactor.core.publisher.Flux.fromIterable(toolCalls).concatMap(toolCall -> {
+			// Execute the tool
+			return executeToolCallReactively(toolCall, toolCallbacks, toolContext).map(response -> {
+				// Collect the response first
+				responses.add(response);
+
+				// Log stderr if present
+				String stderr = toolContext.getStderr();
+				if (stderr != null) {
+					logger.warn("Tool {} stderr: {}", toolCall.name(), stderr);
+					toolContext.setStderr(null); // Clear stderr
+				}
+
+				// Log non-zero exit codes
+				if (toolContext.getExitCode() != null && toolContext.getExitCode() != 0) {
+					logger.warn("Tool {} exited with code {}", toolCall.name(), toolContext.getExitCode());
+				}
+
+				// Unix pipeline semantics: automatically connect stdout → stdin AFTER
+				// response is collected
+				String stdout = toolContext.getStdout();
+				if (stdout != null) {
+					toolContext.setStdin(stdout);
+					// DO NOT clear stdout here - we need it for processContext later!
+				}
+
+				return response;
+			});
+		}).then(Mono.fromCallable(() -> {
+			// Save Unix process state back to processContext if available
+			if (processContext != null) {
+				// IMPORTANT: Save stdout BEFORE clearing it!
+				processContext.setStdout(toolContext.getStdout());
+				processContext.setStderr(toolContext.getStderr());
+				processContext.setCwd(toolContext.getCwd());
+				processContext.setExitCode(toolContext.getExitCode());
+
+				// Connect pipeline for next round (stdout → stdin)
+				processContext.connectPipeline();
+			}
+
+			// Clean up toolContext state AFTER saving to processContext
+			toolContext.setStdin(null);
+			toolContext.setStdout(null);
+
+			// Determine returnDirect based on all tool callbacks
+			Boolean returnDirect = null;
+			for (AssistantMessage.ToolCall toolCall : toolCalls) {
+				ToolCallback toolCallback = findToolCallback(toolCall.name(), toolCallbacks);
+				if (toolCallback != null) {
+					if (returnDirect == null) {
+						returnDirect = toolCallback.getToolMetadata().returnDirect();
+					}
+					else {
+						returnDirect = returnDirect && toolCallback.getToolMetadata().returnDirect();
+					}
+				}
+			}
+			return new InternalToolExecutionResult(new ToolResponseMessage(responses, Map.of()),
+					returnDirect != null ? returnDirect : false);
+		}));
+	}
+
+	/**
+	 * Execute a single tool call reactively with observation support.
+	 */
+	private Mono<ToolResponseMessage.ToolResponse> executeToolCallReactively(AssistantMessage.ToolCall toolCall,
+			List<ToolCallback> toolCallbacks, ToolContext toolContext) {
+		logger.debug("Executing tool call reactively: {}", toolCall.name());
+
+		String toolName = toolCall.name();
+		String toolInputArguments = toolCall.arguments();
+
+		ToolCallback toolCallback = findToolCallback(toolName, toolCallbacks);
+
+		if (toolCallback == null) {
+			return Mono.error(new IllegalStateException("No ToolCallback found for tool name: " + toolName));
+		}
+
+		Boolean returnDirect = toolCallback.getToolMetadata().returnDirect();
+
+		ArmsToolCallingObservationContext observationContext = ArmsToolCallingObservationContext.builder()
+			.toolCall(toolCall)
+			.description(toolCallback.getToolDefinition().description())
+			.returnDirect(returnDirect)
+			.build();
+
+		return ArmsToolCallingObservationDocumentation.EXECUTE_TOOL_OPERATION
+			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext,
+					this.observationRegistry)
+			.observe(() -> toolCallback.call(toolInputArguments, toolContext)
+				.onErrorResume(ToolExecutionException.class, ex -> {
+					observationContext.setError(ex);
+					return Mono.just(toolExecutionExceptionProcessor.process(ex));
+				})
+				.doOnNext(observationContext::setToolResult)
+				.map(toolCallResult -> new ToolResponseMessage.ToolResponse(toolCall.id(), toolName,
+						toolCallResult != null ? toolCallResult : ""))
+				.doOnNext(
+						response -> logger.debug("Tool call completed: {} -> {}", toolName, response.responseData())));
+	}
+
+	/**
+	 * Find a tool callback by name from the provided callbacks or resolver.
+	 */
+	private ToolCallback findToolCallback(String toolName, List<ToolCallback> toolCallbacks) {
+		return toolCallbacks.stream()
+			.filter(tool -> toolName.equals(tool.getToolDefinition().name()))
+			.findFirst()
+			.orElseGet(() -> this.toolCallbackResolver.resolve(toolName));
+	}
+
+	/**
+	 * Execute the tool call and return the response message.
+	 * @deprecated Use executeToolCallsReactively instead for better performance
+	 */
+	@Deprecated(forRemoval = true)
 	private InternalToolExecutionResult executeToolCall(Prompt prompt, AssistantMessage assistantMessage,
 			ToolContext toolContext) {
 		List<ToolCallback> toolCallbacks = List.of();

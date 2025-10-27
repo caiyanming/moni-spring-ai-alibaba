@@ -48,6 +48,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.model.MessageAggregator;
+import org.springframework.ai.chat.model.UnixProcessContext;
 import org.springframework.ai.chat.observation.ChatModelObservationContext;
 import org.springframework.ai.chat.observation.ChatModelObservationConvention;
 import org.springframework.ai.chat.observation.ChatModelObservationDocumentation;
@@ -161,10 +162,15 @@ public class DashScopeChatModel implements ChatModel {
 
 	@Override
 	public Mono<ChatResponse> call(Prompt prompt) {
+		return call(prompt, null);
+	}
+
+	@Override
+	public Mono<ChatResponse> call(Prompt prompt, UnixProcessContext processContext) {
 		Assert.notNull(prompt, "Prompt must not be null");
 		Assert.isTrue(!CollectionUtils.isEmpty(prompt.getInstructions()), "Prompt messages must not be empty");
 		Prompt requestPrompt = buildRequestPrompt(prompt);
-		return internalCallReactive(requestPrompt, null);
+		return internalCallReactive(requestPrompt, null, processContext);
 	}
 
 	@Override
@@ -173,6 +179,11 @@ public class DashScopeChatModel implements ChatModel {
 	}
 
 	public Mono<ChatResponse> internalCallReactive(Prompt prompt, ChatResponse previousChatResponse) {
+		return internalCallReactive(prompt, previousChatResponse, null);
+	}
+
+	public Mono<ChatResponse> internalCallReactive(Prompt prompt, ChatResponse previousChatResponse,
+			UnixProcessContext processContext) {
 		ChatCompletionRequest request = createRequest(prompt, false);
 
 		ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
@@ -196,21 +207,22 @@ public class DashScopeChatModel implements ChatModel {
 			})
 			.flatMap(response -> {
 				if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-					return this.toolCallingManager.executeToolCalls(prompt, response).flatMap(toolExecutionResult -> {
-						if (toolExecutionResult.returnDirect()) {
-							// Return tool execution result directly to the client.
-							return Mono.just(ChatResponse.builder()
-								.from(response)
-								.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
-								.build());
-						}
-						else {
-							// Send the tool execution result back to the model.
-							return this.internalCallReactive(
-									new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
-									response);
-						}
-					});
+					return this.toolCallingManager.executeToolCalls(prompt, response, processContext)
+						.flatMap(toolExecutionResult -> {
+							if (toolExecutionResult.returnDirect()) {
+								// Return tool execution result directly to the client.
+								return Mono.just(ChatResponse.builder()
+									.from(response)
+									.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
+									.build());
+							}
+							else {
+								// Send the tool execution result back to the model.
+								return this.internalCallReactive(
+										new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
+										response, processContext);
+							}
+						});
 				}
 				return Mono.just(response);
 			});
@@ -223,16 +235,26 @@ public class DashScopeChatModel implements ChatModel {
 
 	@Override
 	public Flux<ChatResponse> stream(Prompt prompt) {
+		return stream(prompt, null);
+	}
+
+	@Override
+	public Flux<ChatResponse> stream(Prompt prompt, UnixProcessContext processContext) {
 		Assert.notNull(prompt, "Prompt must not be null");
 		Assert.isTrue(!CollectionUtils.isEmpty(prompt.getInstructions()), "Prompt messages must not be empty");
 
 		// Before moving any further, build the final request Prompt,
 		// merging runtime and default options.
 		Prompt requestPrompt = buildRequestPrompt(prompt);
-		return this.internalStream(requestPrompt, null);
+		return this.internalStream(requestPrompt, null, processContext);
 	}
 
 	public Flux<ChatResponse> internalStream(Prompt prompt, ChatResponse previousChatResponse) {
+		return internalStream(prompt, previousChatResponse, null);
+	}
+
+	public Flux<ChatResponse> internalStream(Prompt prompt, ChatResponse previousChatResponse,
+			UnixProcessContext processContext) {
 		return Flux.deferContextual(contextView -> {
 			ChatCompletionRequest request = createRequest(prompt, true);
 
@@ -263,7 +285,7 @@ public class DashScopeChatModel implements ChatModel {
 			// @formatter:off
 			Flux<ChatResponse> flux = chatResponse.flatMap(response -> {
 					if (toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-						return this.toolCallingManager.executeToolCalls(prompt, response)
+						return this.toolCallingManager.executeToolCalls(prompt, response, processContext)
 								.flatMapMany(toolExecutionResult -> {
 									if (toolExecutionResult.returnDirect()) {
 										// Return tool execution result directly to the client.
@@ -273,7 +295,7 @@ public class DashScopeChatModel implements ChatModel {
 									} else {
 										// Send the tool execution result back to the model.
 										return this.internalStream(new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()),
-												response);
+												response, processContext);
 									}
 								})
 								.subscribeOn(Schedulers.boundedElastic());
