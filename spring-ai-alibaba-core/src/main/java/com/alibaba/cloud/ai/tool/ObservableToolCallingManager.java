@@ -159,11 +159,11 @@ public class ObservableToolCallingManager implements ToolCallingManager {
 
 	private static ToolContext buildToolContext(Prompt prompt, AssistantMessage assistantMessage,
 			UnixProcessContext processContext) {
-		Map<String, Object> toolContextMap = Map.of();
+		Map<String, Object> toolContextMap = new HashMap<>();
 
 		if (prompt.getOptions() instanceof ToolCallingChatOptions toolCallingChatOptions
 				&& !CollectionUtils.isEmpty(toolCallingChatOptions.getToolContext())) {
-			toolContextMap = new HashMap<>(toolCallingChatOptions.getToolContext());
+			toolContextMap.putAll(toolCallingChatOptions.getToolContext());
 
 			toolContextMap.put(ToolContext.TOOL_CALL_HISTORY,
 					buildConversationHistoryBeforeToolExecution(prompt, assistantMessage));
